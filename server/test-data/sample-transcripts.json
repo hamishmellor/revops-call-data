@@ -1,0 +1,23 @@
+[
+  {
+    "id": "mock-call-1",
+    "date": "2025-02-01",
+    "rep": "Jane Smith",
+    "account": "Acme Corp",
+    "transcript": "Rep: Hi, this is Jane from VendorCo. I wanted to follow up on the proposal we sent. Prospect: Yeah, we're still reviewing. Your price is a bit higher than CompetitorX. We were hoping for something around 15% lower to get budget approved. Rep: I understand. We could look at a 10% discount if you commit to the annual plan. Prospect: Let me take that to our procurement team."
+  },
+  {
+    "id": "mock-call-2",
+    "date": "2025-02-05",
+    "rep": "John Doe",
+    "account": "Beta Inc",
+    "transcript": "Rep: Thanks for the time today. Are you open to discussing pricing for the expansion? Prospect: Yes, we're growing and need more seats. Budget is approved for Q2. We're happy with the product so far. Rep: Great, I'll send the renewal quote with the additional licenses. Prospect: Sounds good, no objections on our side."
+  },
+  {
+    "id": "mock-call-3",
+    "date": "2025-02-10",
+    "rep": "Jane Smith",
+    "account": "Gamma LLC",
+    "transcript": "Rep: Hi, do you have a few minutes to talk about our offering? Prospect: Honestly we're in a budget freeze until mid-year. We're also comparing a few vendors. Rep: I understand. When would be a better time to revisit? Prospect: Maybe July. We need to get sign-off from finance first."
+  }
+]
