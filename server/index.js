@@ -41,19 +41,25 @@ function getMockCalls() {
 
 /** POST /run-analysis — clear table, fetch calls, extract, insert, return summary */
 app.post('/run-analysis', async (req, res) => {
-  const { startDate, endDate } = req.body || {};
+  const { startDate, endDate, salesloftApiKey, openaiApiKey } = req.body || {};
   if (!startDate || !endDate) {
     return res.status(400).json({ error: 'startDate and endDate required in body' });
   }
 
-  const useMockCalls = !process.env.SALESLOFT_API_KEY?.trim();
-  const useMockExtractor = !process.env.OPENAI_API_KEY?.trim();
+  const salesloftKey = (salesloftApiKey || process.env.SALESLOFT_API_KEY || '').trim();
+  const openaiKey = (openaiApiKey || process.env.OPENAI_API_KEY || '').trim();
+  const useMockCalls = !salesloftKey;
+  const useMockExtractor = !openaiKey;
 
   if (useMockCalls) {
-    console.log('[server] Using mock calls (no SALESLOFT_API_KEY)');
+    console.log('[server] Using mock calls (no Salesloft API key provided)');
+  } else {
+    console.log('[server] Using live Salesloft API');
   }
   if (useMockExtractor) {
-    console.log('[server] Using mock extractor (no OPENAI_API_KEY)');
+    console.log('[server] Using mock extractor (no OpenAI API key provided)');
+  } else {
+    console.log('[server] Using live OpenAI extraction');
   }
 
   clearInsights();
@@ -63,7 +69,7 @@ app.post('/run-analysis', async (req, res) => {
     if (useMockCalls) {
       calls = getMockCalls();
     } else {
-      calls = await fetchCalls(startDate, endDate);
+      calls = await fetchCalls(startDate, endDate, { apiKey: salesloftKey });
     }
   } catch (err) {
     console.error('[server] Fetch error:', err.message);
@@ -81,7 +87,7 @@ app.post('/run-analysis', async (req, res) => {
         insight = getMockInsight();
       } else {
         await delayBetweenCalls();
-        insight = await extractPricingInsights(call.transcript);
+        insight = await extractPricingInsights(call.transcript, { apiKey: openaiKey });
       }
       insertInsight({
         salesloft_call_id: call.id,

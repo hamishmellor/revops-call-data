@@ -9,6 +9,8 @@ const SALESLOFT_CALL_BASE = import.meta.env.VITE_SALESLOFT_APP_CALLS_BASE || 'ht
 export default function App() {
   const [startDate, setStartDate] = useState(defaultStart);
   const [endDate, setEndDate] = useState(defaultEnd);
+  const [salesloftApiKey, setSalesloftApiKey] = useState('');
+  const [openaiApiKey, setOpenaiApiKey] = useState('');
   const [status, setStatus] = useState('idle'); // idle | running | done | error
   const [summary, setSummary] = useState(null);
   const [insights, setInsights] = useState([]);
@@ -34,10 +36,13 @@ export default function App() {
     setSummary(null);
     setStatus('running');
     try {
+      const body = { startDate, endDate };
+      if (salesloftApiKey.trim()) body.salesloftApiKey = salesloftApiKey.trim();
+      if (openaiApiKey.trim()) body.openaiApiKey = openaiApiKey.trim();
       const res = await fetch('/run-analysis', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ startDate, endDate }),
+        body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -57,28 +62,54 @@ export default function App() {
   return (
     <div>
       <h1>Salesloft Pricing Signal Extractor</h1>
-      <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '1rem' }}>
-        <label>
-          Start date
-          <input
-            type="date"
-            value={startDate}
-            onChange={(e) => setStartDate(e.target.value)}
-            style={{ marginLeft: '0.5rem' }}
-          />
-        </label>
-        <label>
-          End date
-          <input
-            type="date"
-            value={endDate}
-            onChange={(e) => setEndDate(e.target.value)}
-            style={{ marginLeft: '0.5rem' }}
-          />
-        </label>
-        <button onClick={runAnalysis} disabled={status === 'running'}>
-          Run Analysis
-        </button>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '1rem' }}>
+        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <label>
+            Start date
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              style={{ marginLeft: '0.5rem' }}
+            />
+          </label>
+          <label>
+            End date
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              style={{ marginLeft: '0.5rem' }}
+            />
+          </label>
+          <button onClick={runAnalysis} disabled={status === 'running'}>
+            Run Analysis
+          </button>
+        </div>
+        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          <label style={{ minWidth: '200px' }}>
+            Salesloft API key
+            <input
+              type="password"
+              placeholder="Paste key for live calls (or use .env)"
+              value={salesloftApiKey}
+              onChange={(e) => setSalesloftApiKey(e.target.value)}
+              style={{ marginLeft: '0.5rem', width: '280px' }}
+              autoComplete="off"
+            />
+          </label>
+          <label style={{ minWidth: '200px' }}>
+            OpenAI API key
+            <input
+              type="password"
+              placeholder="Optional – for real extraction (or use .env)"
+              value={openaiApiKey}
+              onChange={(e) => setOpenaiApiKey(e.target.value)}
+              style={{ marginLeft: '0.5rem', width: '280px' }}
+              autoComplete="off"
+            />
+          </label>
+        </div>
       </div>
       <div style={{ marginBottom: '1rem' }}>
         {status === 'running' && <span>Running…</span>}

@@ -9,12 +9,13 @@ const PER_PAGE = 100;
 /**
  * @param {string} startDate - YYYY-MM-DD
  * @param {string} endDate - YYYY-MM-DD
+ * @param {{ apiKey?: string }} [options] - Optional API key (else uses SALESLOFT_API_KEY from env)
  * @returns {Promise<Array<{ id: string, date: string, rep: string, account: string, transcript: string }>>}
  */
-export async function fetchCalls(startDate, endDate) {
-  const apiKey = process.env.SALESLOFT_API_KEY;
-  if (!apiKey || !apiKey.trim()) {
-    throw new Error('SALESLOFT_API_KEY is not set. Use mock mode or set the key in .env');
+export async function fetchCalls(startDate, endDate, options = {}) {
+  const apiKey = (options.apiKey || process.env.SALESLOFT_API_KEY || '').trim();
+  if (!apiKey) {
+    throw new Error('Salesloft API key required. Add it in the UI or set SALESLOFT_API_KEY in .env');
   }
 
   const results = [];

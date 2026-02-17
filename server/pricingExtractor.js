@@ -41,12 +41,13 @@ Use temperature 0.1. Return only JSON.`;
 
 /**
  * @param {string} transcript
+ * @param {{ apiKey?: string }} [options] - Optional API key (else uses OPENAI_API_KEY from env)
  * @returns {Promise<{ pricing_discussed: boolean, conversation_type: string, discount_requested_percent: number|null, budget_mentioned: string|null, competitor_mentioned: string|null, objection_category: string, pricing_sentiment: string, key_quotes: string[], confidence_score: number }>}
  */
-export async function extractPricingInsights(transcript) {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey || !apiKey.trim()) {
-    throw new Error('OPENAI_API_KEY is not set');
+export async function extractPricingInsights(transcript, options = {}) {
+  const apiKey = (options.apiKey || process.env.OPENAI_API_KEY || '').trim();
+  if (!apiKey) {
+    throw new Error('OpenAI API key required. Add it in the UI or set OPENAI_API_KEY in .env');
   }
 
   const truncated = transcript.length > MAX_TRANSCRIPT_LENGTH
@@ -54,7 +55,7 @@ export async function extractPricingInsights(transcript) {
     : transcript;
   const userPrompt = USER_PROMPT_TEMPLATE.replace('{{TRANSCRIPT}}', truncated);
 
-  const openai = new OpenAI({ apiKey });
+  const openai = new OpenAI({ apiKey: apiKey });
 
   const run = async () => {
     const res = await openai.chat.completions.create({
