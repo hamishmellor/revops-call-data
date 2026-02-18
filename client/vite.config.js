@@ -8,6 +8,7 @@ export default defineConfig({
     proxy: {
       '/run-analysis': 'http://localhost:3001',
       '/insights': 'http://localhost:3001',
+      '/salesloft-calls': 'http://localhost:3001',
     },
   },
 });

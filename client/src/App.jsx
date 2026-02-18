@@ -1,177 +1,250 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 
-const defaultStart = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+const defaultStart = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 const defaultEnd = new Date().toISOString().slice(0, 10);
-
-// Base URL for "View in Salesloft" links (override with VITE_SALESLOFT_APP_CALLS_BASE in .env)
-const SALESLOFT_CALL_BASE = import.meta.env.VITE_SALESLOFT_APP_CALLS_BASE || 'https://app.salesloft.com/app/calls';
 
 export default function App() {
   const [startDate, setStartDate] = useState(defaultStart);
   const [endDate, setEndDate] = useState(defaultEnd);
-  const [salesloftApiKey, setSalesloftApiKey] = useState('');
-  const [openaiApiKey, setOpenaiApiKey] = useState('');
-  const [status, setStatus] = useState('idle'); // idle | running | done | error
-  const [summary, setSummary] = useState(null);
-  const [insights, setInsights] = useState([]);
+  const [status, setStatus] = useState('idle');
+  const [calls, setCalls] = useState([]);
   const [error, setError] = useState(null);
 
-  const fetchInsights = useCallback(async () => {
+  const [insights, setInsights] = useState([]);
+  const [runStatus, setRunStatus] = useState('idle');
+  const [runResult, setRunResult] = useState(null);
+  const [runError, setRunError] = useState(null);
+  const [quoteTooltip, setQuoteTooltip] = useState({ text: null, x: 0, y: 0 });
+
+  const fetchInsights = async () => {
     try {
-      const res = await fetch(`/insights`);
-      if (!res.ok) throw new Error(res.statusText);
-      const data = await res.json();
-      setInsights(data);
-    } catch {
+      const res = await fetch('/insights');
+      const data = await res.json().catch(() => []);
+      setInsights(Array.isArray(data) ? data : []);
+    } catch (_) {
       setInsights([]);
     }
-  }, []);
+  };
 
   useEffect(() => {
     fetchInsights();
-  }, [fetchInsights]);
+  }, []);
 
-  const runAnalysis = async () => {
+  const fetchSalesloftCalls = async () => {
     setError(null);
-    setSummary(null);
     setStatus('running');
+    setCalls([]);
     try {
-      const body = { startDate, endDate };
-      if (salesloftApiKey.trim()) body.salesloftApiKey = salesloftApiKey.trim();
-      if (openaiApiKey.trim()) body.openaiApiKey = openaiApiKey.trim();
-      const res = await fetch('/run-analysis', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
+      const params = new URLSearchParams({ startDate, endDate });
+      const res = await fetch(`/salesloft-calls?${params}`);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setError(data.detail || data.error || res.statusText);
+        setError(data.error || res.statusText);
         setStatus('error');
         return;
       }
-      setSummary(data);
+      setCalls(Array.isArray(data) ? data : []);
       setStatus('done');
-      await fetchInsights();
     } catch (e) {
       setError(e.message || 'Request failed');
       setStatus('error');
     }
   };
 
+  const runAnalysis = async () => {
+    setRunError(null);
+    setRunStatus('running');
+    setRunResult(null);
+    try {
+      const res = await fetch('/run-analysis', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ startDate, endDate }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setRunError(data.detail || data.error || res.statusText);
+        setRunStatus('error');
+        return;
+      }
+      setRunResult(data);
+      setRunStatus('done');
+      await fetchInsights();
+    } catch (e) {
+      setRunError(e.message || 'Request failed');
+      setRunStatus('error');
+    }
+  };
+
+  const pricingInsights = insights.filter((row) => row.pricing_discussed);
+
+  const formatQuotes = (v) => {
+    if (v == null) return '—';
+    if (typeof v === 'string') {
+      try {
+        const arr = JSON.parse(v);
+        return Array.isArray(arr) ? arr.join(' | ') : v;
+      } catch (_) {
+        return v;
+      }
+    }
+    return Array.isArray(v) ? v.join(' | ') : String(v);
+  };
+
+  const sentimentClass = (s) => {
+    if (!s) return '';
+    const lower = String(s).toLowerCase();
+    if (lower === 'positive') return 'sentiment-positive';
+    if (lower === 'negative') return 'sentiment-negative';
+    return 'sentiment-neutral';
+  };
+
   return (
-    <div>
-      <h1>Salesloft Pricing Signal Extractor</h1>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '1rem' }}>
-        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
-          <label>
-            Start date
-            <input
-              type="date"
-              value={startDate}
-              onChange={(e) => setStartDate(e.target.value)}
-              style={{ marginLeft: '0.5rem' }}
-            />
-          </label>
-          <label>
-            End date
-            <input
-              type="date"
-              value={endDate}
-              onChange={(e) => setEndDate(e.target.value)}
-              style={{ marginLeft: '0.5rem' }}
-            />
-          </label>
-          <button onClick={runAnalysis} disabled={status === 'running'}>
-            Run Analysis
+    <div className="app">
+      <header className="app-header">
+        <div className="app-header-inner">
+          <div>
+            <h1>Pricing Insight</h1>
+            <p className="tagline">Modulr · Sales conversation pricing signals from recorded calls</p>
+          </div>
+          <div className="app-header-logo-wrap">
+            <img src="/modulr-logo.png" alt="Modulr" className="app-header-logo" />
+          </div>
+        </div>
+      </header>
+
+      <section className="card">
+        <div className="card-header">
+          <h2>Conversations &amp; analysis</h2>
+          <p>Fetch recorded Salesloft conversations by date range, then run analysis to extract pricing insights (uses .env keys).</p>
+        </div>
+        <div className="controls">
+          <div className="control-group">
+            <label>Start date</label>
+            <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+          </div>
+          <div className="control-group">
+            <label>End date</label>
+            <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+          </div>
+          <button type="button" className="btn btn-secondary" onClick={fetchSalesloftCalls} disabled={status === 'running'}>
+            {status === 'running' ? 'Fetching…' : 'Fetch conversations'}
+          </button>
+          <button type="button" className="btn btn-primary" onClick={runAnalysis} disabled={runStatus === 'running'}>
+            {runStatus === 'running' ? 'Running analysis…' : 'Run analysis'}
           </button>
         </div>
-        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
-          <label style={{ minWidth: '200px' }}>
-            Salesloft API key
-            <input
-              type="password"
-              placeholder="Paste key for live calls (or use .env)"
-              value={salesloftApiKey}
-              onChange={(e) => setSalesloftApiKey(e.target.value)}
-              style={{ marginLeft: '0.5rem', width: '280px' }}
-              autoComplete="off"
-            />
-          </label>
-          <label style={{ minWidth: '200px' }}>
-            OpenAI API key
-            <input
-              type="password"
-              placeholder="Optional – for real extraction (or use .env)"
-              value={openaiApiKey}
-              onChange={(e) => setOpenaiApiKey(e.target.value)}
-              style={{ marginLeft: '0.5rem', width: '280px' }}
-              autoComplete="off"
-            />
-          </label>
-        </div>
-      </div>
-      <div style={{ marginBottom: '1rem' }}>
-        {status === 'running' && <span>Running…</span>}
-        {status === 'done' && summary && (
-          <span>
-            Done: {summary.processed} processed, {summary.totalCalls} total calls
-            {summary.errors?.length > 0 && `, ${summary.errors.length} errors`}.
-          </span>
+        {error && <div className="alert alert-error">{error}</div>}
+        {runError && <div className="alert alert-error">{runError}</div>}
+        {status === 'done' && (
+          <div className="alert alert-info" style={{ marginLeft: '1.25rem', marginRight: '1.25rem' }}>
+            Found <strong>{calls.length}</strong> recorded conversation{calls.length !== 1 ? 's' : ''}.
+          </div>
         )}
-        {status === 'error' && <span style={{ color: 'crimson' }}>{error}</span>}
-      </div>
-      <div style={{ overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
-          <thead>
-            <tr style={{ borderBottom: '2px solid #ddd', textAlign: 'left' }}>
-              <th style={{ padding: '0.5rem' }}>Date</th>
-              <th style={{ padding: '0.5rem' }}>Rep</th>
-              <th style={{ padding: '0.5rem' }}>Account</th>
-              <th style={{ padding: '0.5rem' }}>Call</th>
-              <th style={{ padding: '0.5rem' }}>Pricing Discussed</th>
-              <th style={{ padding: '0.5rem' }}>Conversation Type</th>
-              <th style={{ padding: '0.5rem' }}>Discount %</th>
-              <th style={{ padding: '0.5rem' }}>Objection Category</th>
-              <th style={{ padding: '0.5rem' }}>Competitor</th>
-              <th style={{ padding: '0.5rem' }}>Sentiment</th>
-              <th style={{ padding: '0.5rem' }}>Confidence</th>
-            </tr>
-          </thead>
-          <tbody>
-            {insights.length === 0 && (
+        {runStatus === 'done' && runResult && (
+          <div className="alert alert-info" style={{ marginLeft: '1.25rem', marginRight: '1.25rem' }}>
+            Analysis: <strong>{runResult.processed}</strong> processed, <strong>{runResult.errors?.length ?? 0}</strong> errors.
+            {runResult.hint && <span style={{ marginLeft: '0.5rem' }}>{runResult.hint}</span>}
+          </div>
+        )}
+      </section>
+
+      <section className="card">
+        <div className="card-header">
+          <h2>Recorded conversations</h2>
+          <p>Conversations in the selected date range. Pick a date range and click &quot;Fetch conversations&quot;.</p>
+        </div>
+        <div className="table-wrap">
+          <table>
+            <thead>
               <tr>
-                <td colSpan={11} style={{ padding: '1rem', color: '#666' }}>
-                  No insights yet. Select a date range and click Run Analysis.
-                </td>
+                <th>Date</th>
+                <th>Conversation ID</th>
+                <th>Title</th>
               </tr>
-            )}
-            {insights.map((row) => (
-              <tr key={row.id} style={{ borderBottom: '1px solid #eee' }}>
-                <td style={{ padding: '0.5rem' }}>{row.date ?? '—'}</td>
-                <td style={{ padding: '0.5rem' }}>{row.rep ?? '—'}</td>
-                <td style={{ padding: '0.5rem' }}>{row.account ?? '—'}</td>
-                <td style={{ padding: '0.5rem' }}>
-                  {row.salesloft_call_id ? (
-                    <a href={`${SALESLOFT_CALL_BASE}/${row.salesloft_call_id}`} target="_blank" rel="noopener noreferrer">
-                      View in Salesloft
-                    </a>
-                  ) : (
-                    '—'
-                  )}
-                </td>
-                <td style={{ padding: '0.5rem' }}>{row.pricing_discussed ? 'Yes' : 'No'}</td>
-                <td style={{ padding: '0.5rem' }}>{row.conversation_type ?? '—'}</td>
-                <td style={{ padding: '0.5rem' }}>{row.discount_requested_percent != null ? row.discount_requested_percent : '—'}</td>
-                <td style={{ padding: '0.5rem' }}>{row.objection_category ?? '—'}</td>
-                <td style={{ padding: '0.5rem' }}>{row.competitor_mentioned ?? '—'}</td>
-                <td style={{ padding: '0.5rem' }}>{row.pricing_sentiment ?? '—'}</td>
-                <td style={{ padding: '0.5rem' }}>{row.confidence_score != null ? Number(row.confidence_score).toFixed(2) : '—'}</td>
+            </thead>
+            <tbody>
+              {calls.length === 0 && status !== 'running' && (
+                <tr>
+                  <td colSpan={3} className="empty-state">
+                    No conversations loaded. Select dates and click &quot;Fetch conversations&quot;.
+                  </td>
+                </tr>
+              )}
+              {calls.map((c) => (
+                <tr key={c.id}>
+                  <td>{c.date}</td>
+                  <td className="mono">{c.id}</td>
+                  <td>{c.title}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="card">
+        <div className="card-header">
+          <h2>Pricing insights</h2>
+          <p>Only conversations where pricing was discussed. Run analysis to refresh.</p>
+        </div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Rep</th>
+                <th>Account</th>
+                <th>Deal stage</th>
+                <th>Sentiment</th>
+                <th>Key quotes</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {pricingInsights.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="empty-state">
+                    {insights.length === 0 ? 'No insights yet. Run analysis above to extract pricing metadata.' : 'No insights where pricing was discussed.'}
+                  </td>
+                </tr>
+              )}
+              {pricingInsights.map((row) => (
+                <tr key={row.id}>
+                  <td>{row.date ?? '—'}</td>
+                  <td>{row.rep ?? '—'}</td>
+                  <td>{row.account ?? '—'}</td>
+                  <td>{row.deal_stage ?? row.conversation_type ?? '—'}</td>
+                  <td>
+                    <span className={`sentiment ${sentimentClass(row.pricing_sentiment)}`}>
+                      {row.pricing_sentiment ?? '—'}
+                    </span>
+                  </td>
+                  <td
+                    className="key-quotes"
+                    onMouseEnter={(e) => {
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      setQuoteTooltip({ text: formatQuotes(row.key_quotes), x: rect.left, y: rect.bottom });
+                    }}
+                    onMouseLeave={() => setQuoteTooltip((t) => ({ ...t, text: null }))}
+                  >
+                    {formatQuotes(row.key_quotes)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {quoteTooltip.text != null && (
+        <div
+          className="quote-tooltip"
+          style={{ left: quoteTooltip.x, top: quoteTooltip.y }}
+          role="tooltip"
+        >
+          {quoteTooltip.text}
+        </div>
+      )}
     </div>
   );
 }

@@ -64,13 +64,20 @@ npm -v
    cd ../client && npm install
    ```
 
-2. **Environment variables**
+2. **Environment variables (recommended – no need to paste keys in the UI)**
 
-   Copy `.env.example` to `.env` and fill in:
+   Copy `.env.example` to `.env` in the **project root** and add your keys:
 
-   - `SALESLOFT_API_KEY` – required for live Salesloft fetch; omit to use **mock/fallback mode**.
-   - `OPENAI_API_KEY` – required for real extraction; omit in mock mode to use hardcoded results (no external API calls).
-   - `DB_PATH` – optional; if set, SQLite uses this file instead of in-memory (e.g. `./data/pricing.db`).
+   ```
+   SALESLOFT_API_KEY=your_actual_key_here
+   OPENAI_API_KEY=your_actual_key_here
+   ```
+
+   The server loads `.env` from the project root, so you only set them once. You can leave the key fields empty in the app when using .env.
+
+   - `SALESLOFT_API_KEY` – for live Salesloft fetch; omit to use mock mode.
+   - `OPENAI_API_KEY` – for real extraction; omit in mock mode for hardcoded results.
+   - `DB_PATH` – optional; e.g. `./data/pricing.db` for file-based SQLite.
 
 ## Run locally
 
@@ -123,6 +130,16 @@ This runs `server/scripts/run-mock-analysis.js`, which calls `POST /run-analysis
 Date, Rep, Account, Pricing Discussed, Conversation Type, Discount %, Objection Category, Competitor, Sentiment, Confidence. No transcript storage; only extracted fields.
 
 ## Troubleshooting
+
+**Run takes a long time** — The app caps at 50 calls per run (and 5 pages when listing) so a run finishes in a few minutes. To process more, edit `server/salesloftService.js`: increase `MAX_CALLS` and/or `MAX_PAGES`.
+
+**401 Invalid Bearer token** — Salesloft is rejecting your API key. In `.env`: use the **full** key from Salesloft (Settings → API), with no extra spaces, newlines, or quotes. Create a new key in Salesloft if needed.
+
+**No data when using Salesloft API key** — The app fetches from Salesloft’s Activity History (`GET /v2/activities/calls`) and only includes calls that have a transcript. Check:
+
+1. **Date range** — Use a range where calls actually exist (e.g. last 30 days).
+2. **Server logs** — In the terminal where the server runs, look for `[salesloft]` lines: “List returned N call(s)” vs “No calls in date range”. If you see “N calls, 0 with transcript”, Salesloft is returning calls but transcripts aren’t available (e.g. transcriptions may be on a different endpoint or plan).
+3. **API key scope** — The key must have access to read Activities/Calls (and optionally Transcriptions). In Salesloft: Settings → API to confirm scopes.
 
 **`Error: listen EADDRINUSE: address already in use :::3001`** — Something is already using port 3001 (e.g. a previous server run). Free it with:
 

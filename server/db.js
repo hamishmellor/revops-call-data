@@ -18,9 +18,11 @@ function getDb() {
     CREATE TABLE IF NOT EXISTS pricing_insights (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       salesloft_call_id TEXT,
+      salesloft_app_call_id TEXT,
       date TEXT,
       rep TEXT,
       account TEXT,
+      deal_stage TEXT,
       pricing_discussed INTEGER,
       conversation_type TEXT,
       discount_requested_percent REAL,
@@ -32,6 +34,17 @@ function getDb() {
       confidence_score REAL
     );
   `);
+  try {
+    const cols = db.prepare(`PRAGMA table_info(pricing_insights)`).all();
+    const hasAppCallId = cols.some((c) => c.name === 'salesloft_app_call_id');
+    if (!hasAppCallId) {
+      db.exec(`ALTER TABLE pricing_insights ADD COLUMN salesloft_app_call_id TEXT`);
+    }
+    const hasDealStage = cols.some((c) => c.name === 'deal_stage');
+    if (!hasDealStage) {
+      db.exec(`ALTER TABLE pricing_insights ADD COLUMN deal_stage TEXT`);
+    }
+  } catch (_) {}
   return db;
 }
 
@@ -53,16 +66,18 @@ export function insertInsight(row) {
   const db = getDbInstance();
   db.prepare(`
     INSERT INTO pricing_insights (
-      salesloft_call_id, date, rep, account,
+      salesloft_call_id, salesloft_app_call_id, date, rep, account, deal_stage,
       pricing_discussed, conversation_type, discount_requested_percent,
       budget_mentioned, competitor_mentioned, objection_category,
       pricing_sentiment, key_quotes, confidence_score
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     row.salesloft_call_id ?? null,
+    row.salesloft_app_call_id ?? null,
     row.date ?? null,
     row.rep ?? null,
     row.account ?? null,
+    row.deal_stage ?? null,
     row.pricing_discussed != null ? (row.pricing_discussed ? 1 : 0) : null,
     row.conversation_type ?? null,
     row.discount_requested_percent ?? null,

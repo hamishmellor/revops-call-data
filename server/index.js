@@ -3,17 +3,30 @@
  * POST /run-analysis, GET /insights, DELETE /insights
  */
 
-import 'dotenv/config';
+import dotenv from 'dotenv';
 import express from 'express';
 import { getDbInstance, clearInsights, insertInsight, getAllInsights } from './db.js';
-import { fetchCalls } from './salesloftService.js';
+import { listCalls, fetchConversationsWithTranscripts } from './salesloftSimple.js';
 import { extractPricingInsights, delayBetweenCalls } from './pricingExtractor.js';
 import { getMockInsight } from './mockExtractor.js';
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
+import { dirname, join, resolve } from 'path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+// Load .env: try project root (parent of server/) then cwd; strip BOM so keys are read correctly
+const rootEnv = resolve(__dirname, '..', '.env');
+const cwdEnv = resolve(process.cwd(), '.env');
+const cwdParentEnv = resolve(process.cwd(), '..', '.env');
+const envPath = existsSync(rootEnv) ? rootEnv : existsSync(cwdParentEnv) ? cwdParentEnv : existsSync(cwdEnv) ? cwdEnv : null;
+if (envPath) {
+  const raw = readFileSync(envPath, 'utf8').replace(/^\uFEFF/, '');
+  const parsed = dotenv.parse(raw);
+  Object.assign(process.env, parsed);
+  console.log('[server] Loaded .env from', envPath);
+} else {
+  console.warn('[server] No .env found (tried root and cwd). Using env vars or paste keys in UI.');
+}
 const app = express();
 const PORT = process.env.PORT || 3001;
 
@@ -32,6 +45,26 @@ app.use((req, res, next) => {
 getDbInstance();
 console.log('[server] DB initialized (DB_PATH=%s)', process.env.DB_PATH || ':memory:');
 
+/** GET /salesloft-calls — minimal: just list call id, date, title from Salesloft (no OpenAI, no metadata). Proof of Salesloft access. */
+app.get('/salesloft-calls', async (req, res) => {
+  try {
+    const startDate = req.query.startDate || '';
+    const endDate = req.query.endDate || '';
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'Query params startDate and endDate required (YYYY-MM-DD)' });
+    }
+    const apiKey = (req.query.apiKey || process.env.SALESLOFT_API_KEY || '').trim();
+    if (!apiKey) {
+      return res.status(400).json({ error: 'Salesloft API key required. Set in .env as SALESLOFT_API_KEY or pass apiKey in query.' });
+    }
+    const calls = await listCalls(apiKey, startDate, endDate);
+    res.json(calls);
+  } catch (err) {
+    console.error('[server] /salesloft-calls error:', err.message);
+    res.status(err.message.includes('401') ? 401 : 502).json({ error: err.message });
+  }
+});
+
 /** Load mock calls when SALESLOFT_API_KEY is not set */
 function getMockCalls() {
   const path = join(__dirname, 'test-data', 'sample-transcripts.json');
@@ -41,83 +74,108 @@ function getMockCalls() {
 
 /** POST /run-analysis — clear table, fetch calls, extract, insert, return summary */
 app.post('/run-analysis', async (req, res) => {
-  const { startDate, endDate, salesloftApiKey, openaiApiKey } = req.body || {};
-  if (!startDate || !endDate) {
-    return res.status(400).json({ error: 'startDate and endDate required in body' });
-  }
-
-  const salesloftKey = (salesloftApiKey || process.env.SALESLOFT_API_KEY || '').trim();
-  const openaiKey = (openaiApiKey || process.env.OPENAI_API_KEY || '').trim();
-  const useMockCalls = !salesloftKey;
-  const useMockExtractor = !openaiKey;
-
-  if (useMockCalls) {
-    console.log('[server] Using mock calls (no Salesloft API key provided)');
-  } else {
-    console.log('[server] Using live Salesloft API');
-  }
-  if (useMockExtractor) {
-    console.log('[server] Using mock extractor (no OpenAI API key provided)');
-  } else {
-    console.log('[server] Using live OpenAI extraction');
-  }
-
-  clearInsights();
-  let calls = [];
-
   try {
+    const { startDate, endDate, salesloftApiKey, openaiApiKey } = req.body || {};
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'startDate and endDate required in body' });
+    }
+
+    const salesloftKey = (salesloftApiKey || process.env.SALESLOFT_API_KEY || '').trim();
+    const openaiKey = (openaiApiKey || process.env.OPENAI_API_KEY || '').trim();
+    const useMockCalls = !salesloftKey;
+    const useMockExtractor = !openaiKey;
+
     if (useMockCalls) {
-      calls = getMockCalls();
+      console.log('[server] Using mock calls (no Salesloft API key provided)');
     } else {
-      calls = await fetchCalls(startDate, endDate, { apiKey: salesloftKey });
+      console.log('[server] Using live Salesloft API');
     }
-  } catch (err) {
-    console.error('[server] Fetch error:', err.message);
-    return res.status(502).json({ error: 'Failed to fetch calls', detail: err.message });
-  }
+    if (useMockExtractor) {
+      console.log('[server] Using mock extractor (no OpenAI API key provided)');
+    } else {
+      console.log('[server] Using live OpenAI extraction');
+    }
 
-  const totalCalls = calls.length;
-  const errors = [];
-  let processed = 0;
+    clearInsights();
+    let calls = [];
 
-  for (const call of calls) {
     try {
-      let insight;
-      if (useMockExtractor) {
-        insight = getMockInsight();
+      if (useMockCalls) {
+        calls = getMockCalls();
       } else {
-        await delayBetweenCalls();
-        insight = await extractPricingInsights(call.transcript, { apiKey: openaiKey });
+        calls = await fetchConversationsWithTranscripts(salesloftKey, startDate, endDate);
       }
-      insertInsight({
-        salesloft_call_id: call.id,
-        date: call.date,
-        rep: call.rep,
-        account: call.account,
-        ...insight,
-      });
-      processed += 1;
     } catch (err) {
-      console.error(`[server] Extract failed for call ${call.id}:`, err.message);
-      errors.push({ callId: call.id, error: err.message });
+      console.error('[server] Fetch error:', err.message);
+      return res.status(502).json({ error: 'Failed to fetch conversations', detail: err.message });
     }
-  }
 
-  console.log(`[server] Run complete: totalCalls=${totalCalls}, processed=${processed}, errors=${errors.length}`);
-  res.json({ totalCalls, processed, errors });
+    const totalCalls = calls.length;
+    const errors = [];
+    let processed = 0;
+
+    for (let i = 0; i < calls.length; i++) {
+      const call = calls[i];
+      if (calls.length > 5 && i > 0 && i % 10 === 0) {
+        console.log(`[server] Extraction progress: ${i}/${calls.length}`);
+      }
+      try {
+        let insight;
+        if (useMockExtractor) {
+          insight = getMockInsight();
+        } else {
+          await delayBetweenCalls();
+          insight = await extractPricingInsights(call.transcript, { apiKey: openaiKey });
+        }
+        insertInsight({
+          salesloft_call_id: call.id,
+          salesloft_app_call_id: call.app_call_id ?? null,
+          date: call.date,
+          rep: call.rep,
+          account: call.account,
+          deal_stage: call.deal_stage ?? null,
+          ...insight,
+        });
+        processed += 1;
+      } catch (err) {
+        console.error(`[server] Extract failed for call ${call.id}:`, err.message);
+        errors.push({ callId: call.id, error: err.message });
+      }
+    }
+
+    console.log(`[server] Run complete: totalCalls=${totalCalls}, processed=${processed}, errors=${errors.length}`);
+    const payload = { totalCalls, processed, errors };
+    if (!useMockCalls && totalCalls === 0) {
+      payload.hint = 'Salesloft returned 0 conversations. Check the date range and that your API key has access to Conversations. See server console for [salesloft] logs.';
+    }
+    res.json(payload);
+  } catch (err) {
+    console.error('[server] Internal error:', err);
+    res.status(500).json({ error: 'Internal server error', detail: err.message });
+  }
 });
 
 /** GET /insights — return all rows */
 app.get('/insights', (req, res) => {
-  const rows = getAllInsights();
-  res.json(rows);
+  try {
+    const rows = getAllInsights();
+    res.json(rows);
+  } catch (err) {
+    console.error('[server] GET /insights error:', err);
+    res.status(500).json({ error: 'Internal server error', detail: err.message });
+  }
 });
 
 /** DELETE /insights — clear table */
 app.delete('/insights', (req, res) => {
-  clearInsights();
-  console.log('[server] Insights table cleared');
-  res.status(204).send();
+  try {
+    clearInsights();
+    console.log('[server] Insights table cleared');
+    res.status(204).send();
+  } catch (err) {
+    console.error('[server] DELETE /insights error:', err);
+    res.status(500).json({ error: 'Internal server error', detail: err.message });
+  }
 });
 
 app.listen(PORT, () => {
