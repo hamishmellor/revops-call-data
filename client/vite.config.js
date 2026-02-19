@@ -9,6 +9,7 @@ export default defineConfig({
       '/run-analysis': 'http://localhost:3001',
       '/insights': 'http://localhost:3001',
       '/salesloft-calls': 'http://localhost:3001',
+      '/export-transcripts': 'http://localhost:3001',
     },
   },
 });

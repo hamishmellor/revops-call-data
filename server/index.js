@@ -65,6 +65,62 @@ app.get('/salesloft-calls', async (req, res) => {
   }
 });
 
+/** GET /export-transcripts — fetch raw transcripts for date range. ?format=txt (default, best for LLM) or ?format=json. */
+app.get('/export-transcripts', async (req, res) => {
+  try {
+    const startDate = req.query.startDate || '';
+    const endDate = req.query.endDate || '';
+    const format = (req.query.format || 'txt').toLowerCase();
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'Query params startDate and endDate required (YYYY-MM-DD)' });
+    }
+    const apiKey = (req.query.apiKey || process.env.SALESLOFT_API_KEY || '').trim();
+    if (!apiKey) {
+      return res.status(400).json({ error: 'Salesloft API key required. Set in .env as SALESLOFT_API_KEY.' });
+    }
+    const conversations = await fetchConversationsWithTranscripts(apiKey, startDate, endDate, { maxConversations: Infinity });
+
+    if (format === 'json') {
+      const exportData = conversations.map((c) => ({
+        conversationId: c.id,
+        date: c.date,
+        rep: c.rep || null,
+        account: c.account || null,
+        deal_stage: c.deal_stage || null,
+        transcript: c.transcript,
+      }));
+      res.setHeader('Content-Type', 'application/json');
+      if (req.query.attachment !== '0') {
+        const filename = `transcripts-${startDate}-to-${endDate}.json`;
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      }
+      return res.json(exportData);
+    }
+
+    // Plain text: one block per conversation, minimal tokens, ideal for pasting into an LLM
+    const lines = [];
+    conversations.forEach((c, i) => {
+      lines.push(`=== Conversation ${i + 1} ===`);
+      lines.push(`Date: ${c.date || '—'}`);
+      lines.push(`Rep: ${c.rep || '—'}`);
+      lines.push(`Account: ${c.account || '—'}`);
+      lines.push(`Deal stage: ${c.deal_stage || '—'}`);
+      lines.push(`Conversation ID: ${c.id}`);
+      lines.push('');
+      lines.push(c.transcript && c.transcript !== '[No transcript]' ? c.transcript : '[No transcript]');
+      lines.push('');
+    });
+    const body = lines.join('\n');
+    const filename = `transcripts-${startDate}-to-${endDate}.txt`;
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(body);
+  } catch (err) {
+    console.error('[server] /export-transcripts error:', err.message);
+    res.status(err.message.includes('401') ? 401 : 502).json({ error: err.message });
+  }
+});
+
 /** Load mock calls when SALESLOFT_API_KEY is not set */
 function getMockCalls() {
   const path = join(__dirname, 'test-data', 'sample-transcripts.json');

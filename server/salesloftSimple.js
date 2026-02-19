@@ -294,17 +294,17 @@ export async function getConversationTranscript(apiKey, conversationId) {
         if (!rep) rep = data.user?.display_name ?? data.rep ?? data.user_name ?? null;
         return { transcript: String(transcript).trim(), rep: rep ?? undefined, account: account ?? undefined, deal_stage: deal_stage ?? undefined };
       }
-      const summary = data.summary ?? data.summary_text ?? null;
-      if (summary && typeof summary === 'object' && summary.text && String(summary.text).trim().length > 100) {
-        return { transcript: `[Summary only]\n${String(summary.text).trim()}`, rep: rep ?? undefined, account: account ?? undefined, deal_stage: deal_stage ?? undefined };
-      }
-      if (summary && typeof summary === 'string' && summary.trim().length > 100) {
-        return { transcript: `[Summary only]\n${String(summary).trim()}`, rep: rep ?? undefined, account: account ?? undefined, deal_stage: deal_stage ?? undefined };
-      }
       const transId = data.transcription?.id ?? data.transcription_id ?? (data.transcription && typeof data.transcription === 'object' && data.transcription.id) ?? null;
       if (transId) {
         const fromTrans = await fetchTranscriptById(key, transId);
         if (fromTrans) return { transcript: fromTrans, rep: rep ?? undefined, account: account ?? undefined, deal_stage: deal_stage ?? undefined };
+      }
+      const summary = data.summary ?? data.summary_text ?? null;
+      if (summary && typeof summary === 'object' && summary.text && String(summary.text).trim().length > 100) {
+        return { transcript: `[Summary only – full transcript not available]\n${String(summary.text).trim()}`, rep: rep ?? undefined, account: account ?? undefined, deal_stage: deal_stage ?? undefined };
+      }
+      if (summary && typeof summary === 'string' && summary.trim().length > 100) {
+        return { transcript: `[Summary only – full transcript not available]\n${String(summary).trim()}`, rep: rep ?? undefined, account: account ?? undefined, deal_stage: deal_stage ?? undefined };
       }
     }
   } catch (_) {}
@@ -350,6 +350,17 @@ export async function getConversationTranscript(apiKey, conversationId) {
 async function fetchTranscriptById(apiKey, transcriptionId) {
   const key = (apiKey || process.env.SALESLOFT_API_KEY || '').trim();
   try {
+    const artifactRes = await fetch(`${SALESLOFT_BASE}/transcriptions/${encodeURIComponent(transcriptionId)}/artifact`, {
+      headers: { Authorization: `Bearer ${key}` },
+    });
+    if (artifactRes.ok) {
+      const artifactJson = await artifactRes.json();
+      const ad = artifactJson.data ?? artifactJson.artifact ?? artifactJson;
+      const artifactText = ad.transcript ?? ad.text ?? ad.content ?? ad.body ?? (typeof ad === 'string' ? ad : null);
+      if (artifactText && String(artifactText).trim()) return String(artifactText).trim();
+    }
+  } catch (_) {}
+  try {
     const res = await fetch(`${SALESLOFT_BASE}/transcriptions/${encodeURIComponent(transcriptionId)}`, {
       headers: { Authorization: `Bearer ${key}` },
     });
@@ -359,6 +370,8 @@ async function fetchTranscriptById(apiKey, transcriptionId) {
       const text = data.transcript ?? data.text ?? data.content ?? data.body ?? null;
       if (text && String(text).trim()) return String(text).trim();
     }
+  } catch (_) {}
+  try {
     const sentRes = await fetch(`${SALESLOFT_BASE}/transcriptions/${encodeURIComponent(transcriptionId)}/sentences`, {
       headers: { Authorization: `Bearer ${key}` },
     });

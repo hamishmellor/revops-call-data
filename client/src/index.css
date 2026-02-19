@@ -68,6 +68,32 @@ body {
   opacity: 0.9;
 }
 
+.app-nav {
+  display: flex;
+  gap: 0.25rem;
+  align-items: center;
+}
+
+.app-nav-link {
+  padding: 0.4rem 0.75rem;
+  color: rgba(255, 255, 255, 0.9);
+  text-decoration: none;
+  font-size: 0.875rem;
+  font-weight: 500;
+  border-radius: 6px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.app-nav-link:hover {
+  color: white;
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.app-nav-link.active {
+  color: white;
+  background: rgba(255, 255, 255, 0.25);
+}
+
 .app-header-logo-wrap {
   background: #ffffff;
   padding: 6px 10px;
