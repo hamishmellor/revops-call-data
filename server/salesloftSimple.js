@@ -288,22 +288,27 @@ export async function getConversationTranscript(apiKey, conversationId) {
         const oppStage = await fetchOpportunityStage(key, opportunityId);
         if (oppStage) deal_stage = oppStage;
       }
+      const transId = data.transcription?.id ?? data.transcription_id ?? (data.transcription && typeof data.transcription === 'object' && data.transcription.id) ?? null;
+      if (transId) {
+        const fromTrans = await fetchTranscriptById(key, transId);
+        if (fromTrans) {
+          if (!rep) rep = data.user?.display_name ?? data.rep ?? data.user_name ?? null;
+          return { transcript: fromTrans, rep: rep ?? undefined, account: account ?? undefined, deal_stage: deal_stage ?? undefined };
+        }
+      }
       const transcript =
         data.transcript ?? data.transcript_text ?? data.text ?? data.content ?? null;
       if (transcript && String(transcript).trim()) {
         if (!rep) rep = data.user?.display_name ?? data.rep ?? data.user_name ?? null;
         return { transcript: String(transcript).trim(), rep: rep ?? undefined, account: account ?? undefined, deal_stage: deal_stage ?? undefined };
       }
-      const transId = data.transcription?.id ?? data.transcription_id ?? (data.transcription && typeof data.transcription === 'object' && data.transcription.id) ?? null;
-      if (transId) {
-        const fromTrans = await fetchTranscriptById(key, transId);
-        if (fromTrans) return { transcript: fromTrans, rep: rep ?? undefined, account: account ?? undefined, deal_stage: deal_stage ?? undefined };
-      }
       const summary = data.summary ?? data.summary_text ?? null;
       if (summary && typeof summary === 'object' && summary.text && String(summary.text).trim().length > 100) {
+        console.log(`[salesloft] Using summary for conversation ${conversationId} – no transcript from API`);
         return { transcript: `[Summary only – full transcript not available]\n${String(summary.text).trim()}`, rep: rep ?? undefined, account: account ?? undefined, deal_stage: deal_stage ?? undefined };
       }
       if (summary && typeof summary === 'string' && summary.trim().length > 100) {
+        console.log(`[salesloft] Using summary for conversation ${conversationId} – no transcript from API`);
         return { transcript: `[Summary only – full transcript not available]\n${String(summary).trim()}`, rep: rep ?? undefined, account: account ?? undefined, deal_stage: deal_stage ?? undefined };
       }
     }
@@ -349,15 +354,67 @@ export async function getConversationTranscript(apiKey, conversationId) {
 
 async function fetchTranscriptById(apiKey, transcriptionId) {
   const key = (apiKey || process.env.SALESLOFT_API_KEY || '').trim();
+  // Prefer paginated sentences first so we get the full transcript; artifact/main often return only a segment.
+  try {
+    const allSentences = [];
+    let page = 1;
+    const perPage = 100;
+    let totalPages = null;
+    const maxPages = 100;
+    while (page <= maxPages) {
+      const sentUrl = new URL(`${SALESLOFT_BASE}/transcriptions/${encodeURIComponent(transcriptionId)}/sentences`);
+      sentUrl.searchParams.set('per_page', String(perPage));
+      sentUrl.searchParams.set('page', String(page));
+      const sentRes = await fetch(sentUrl.toString(), { headers: { Authorization: `Bearer ${key}` } });
+      if (!sentRes.ok) break;
+      const sentJson = await sentRes.json();
+      const meta = sentJson.metadata ?? sentJson;
+      if (totalPages == null && meta.total_pages != null) totalPages = Number(meta.total_pages) || null;
+      const list = sentJson.data ?? sentJson.results ?? sentJson.sentences ?? [];
+      const arr = Array.isArray(list) ? list : [];
+      if (arr.length === 0) break;
+      allSentences.push(...arr);
+      const nextPage = meta.next_page ?? sentJson.next_page ?? null;
+      if (nextPage != null && nextPage > page) {
+        page = nextPage;
+      } else if (totalPages != null && page < totalPages) {
+        page += 1;
+      } else if (arr.length >= perPage) {
+        page += 1;
+      } else {
+        break;
+      }
+    }
+    if (allSentences.length > 0) {
+      const hasOrder = allSentences.some(
+        (s) => s.order_number != null || s.start_time != null || s.position != null || s.index != null
+      );
+      const ordered = hasOrder
+        ? [...allSentences].sort((a, b) => {
+            const va = a.order_number ?? a.start_time ?? a.position ?? a.index ?? 0;
+            const vb = b.order_number ?? b.start_time ?? b.position ?? b.index ?? 0;
+            return Number(va) - Number(vb);
+          })
+        : allSentences.reverse();
+      const parts = ordered.map((s) => s.text ?? s.content ?? s.value ?? '').filter(Boolean);
+      if (parts.length) return parts.join(' ');
+    }
+  } catch (_) {}
   try {
     const artifactRes = await fetch(`${SALESLOFT_BASE}/transcriptions/${encodeURIComponent(transcriptionId)}/artifact`, {
       headers: { Authorization: `Bearer ${key}` },
     });
     if (artifactRes.ok) {
-      const artifactJson = await artifactRes.json();
-      const ad = artifactJson.data ?? artifactJson.artifact ?? artifactJson;
-      const artifactText = ad.transcript ?? ad.text ?? ad.content ?? ad.body ?? (typeof ad === 'string' ? ad : null);
-      if (artifactText && String(artifactText).trim()) return String(artifactText).trim();
+      const contentType = (artifactRes.headers.get('content-type') || '').toLowerCase();
+      if (contentType.includes('text/plain')) {
+        const raw = await artifactRes.text();
+        if (raw && String(raw).trim()) return String(raw).trim();
+      } else {
+        const artifactJson = await artifactRes.json();
+        const ad = artifactJson.data ?? artifactJson.artifact ?? artifactJson;
+        const artifactText = ad.transcript ?? ad.text ?? ad.content ?? ad.body ?? (typeof ad === 'string' ? ad : null);
+        if (artifactText && String(artifactText).trim()) return String(artifactText).trim();
+      }
     }
   } catch (_) {}
   try {
@@ -365,22 +422,16 @@ async function fetchTranscriptById(apiKey, transcriptionId) {
       headers: { Authorization: `Bearer ${key}` },
     });
     if (res.ok) {
-      const json = await res.json();
-      const data = json.data ?? json.transcription ?? json;
-      const text = data.transcript ?? data.text ?? data.content ?? data.body ?? null;
-      if (text && String(text).trim()) return String(text).trim();
-    }
-  } catch (_) {}
-  try {
-    const sentRes = await fetch(`${SALESLOFT_BASE}/transcriptions/${encodeURIComponent(transcriptionId)}/sentences`, {
-      headers: { Authorization: `Bearer ${key}` },
-    });
-    if (sentRes.ok) {
-      const sentJson = await sentRes.json();
-      const list = sentJson.data ?? sentJson.results ?? sentJson.sentences ?? [];
-      const arr = Array.isArray(list) ? list : [];
-      const parts = arr.map((s) => s.text ?? s.content ?? s.value ?? '').filter(Boolean);
-      if (parts.length) return parts.join(' ');
+      const contentType = (res.headers.get('content-type') || '').toLowerCase();
+      if (contentType.includes('text/plain')) {
+        const raw = await res.text();
+        if (raw && String(raw).trim()) return String(raw).trim();
+      } else {
+        const json = await res.json();
+        const data = json.data ?? json.transcription ?? json;
+        const text = data.transcript ?? data.text ?? data.content ?? data.body ?? null;
+        if (text && String(text).trim()) return String(text).trim();
+      }
     }
   } catch (_) {}
   return null;
@@ -406,14 +457,20 @@ export async function fetchConversationsWithTranscripts(apiKey, startDate, endDa
     }
     const { transcript, rep, account, deal_stage } = await getConversationTranscript(apiKey, c.id);
     const text = (transcript && transcript.trim()) ? transcript.trim() : '[No transcript]';
+    const charCount = text !== '[No transcript]' ? text.length : 0;
+    const wordCount =
+      text !== '[No transcript]' ? text.split(/\s+/).filter(Boolean).length : 0;
     results.push({
       id: c.id,
       app_call_id: null,
       date: c.date,
+      title: c.title || null,
       rep: (rep || '').trim(),
       account: (account || '').trim(),
       deal_stage: (deal_stage || '').trim() || null,
       transcript: text,
+      word_count: wordCount,
+      char_count: charCount,
     });
   }
   const withTranscript = results.filter((r) => r.transcript !== '[No transcript]').length;

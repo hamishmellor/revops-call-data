@@ -83,10 +83,14 @@ app.get('/export-transcripts', async (req, res) => {
     if (format === 'json') {
       const exportData = conversations.map((c) => ({
         conversationId: c.id,
+        id: c.id,
         date: c.date,
+        title: c.title || null,
         rep: c.rep || null,
         account: c.account || null,
         deal_stage: c.deal_stage || null,
+        word_count: c.word_count ?? 0,
+        char_count: c.char_count ?? 0,
         transcript: c.transcript,
       }));
       res.setHeader('Content-Type', 'application/json');
@@ -102,9 +106,11 @@ app.get('/export-transcripts', async (req, res) => {
     conversations.forEach((c, i) => {
       lines.push(`=== Conversation ${i + 1} ===`);
       lines.push(`Date: ${c.date || '—'}`);
+      lines.push(`Title: ${c.title || '—'}`);
       lines.push(`Rep: ${c.rep || '—'}`);
       lines.push(`Account: ${c.account || '—'}`);
       lines.push(`Deal stage: ${c.deal_stage || '—'}`);
+      lines.push(`Words: ${c.word_count ?? 0} | Chars: ${c.char_count ?? 0}`);
       lines.push(`Conversation ID: ${c.id}`);
       lines.push('');
       lines.push(c.transcript && c.transcript !== '[No transcript]' ? c.transcript : '[No transcript]');

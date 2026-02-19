@@ -109,6 +109,45 @@ body {
   display: block;
 }
 
+/* Home page links */
+.home-links {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1.25rem;
+}
+
+.home-link {
+  display: block;
+  padding: 1.25rem;
+  background: var(--modulr-surface);
+  border: 1px solid var(--modulr-border);
+  border-radius: var(--radius);
+  text-decoration: none;
+  color: var(--modulr-text);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.home-link:hover {
+  border-color: var(--modulr-blue);
+  box-shadow: 0 0 0 2px var(--modulr-blue-light);
+}
+
+.home-link-title {
+  display: block;
+  font-size: 1.125rem;
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+  color: var(--modulr-blue);
+}
+
+.home-link-desc {
+  display: block;
+  font-size: 0.875rem;
+  color: var(--modulr-text-muted);
+  line-height: 1.4;
+}
+
 /* Cards */
 .card {
   background: var(--modulr-surface);
