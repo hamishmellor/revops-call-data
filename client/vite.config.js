@@ -10,6 +10,7 @@ export default defineConfig({
       '/insights': 'http://localhost:3001',
       '/salesloft-calls': 'http://localhost:3001',
       '/export-transcripts': 'http://localhost:3001',
+      '/export-transcripts-stream': 'http://localhost:3001',
     },
   },
 });

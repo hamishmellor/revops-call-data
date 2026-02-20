@@ -1,25 +1,67 @@
-import { useState } from 'react';
+import { useState, useRef, useMemo } from 'react';
+import JSZip from 'jszip';
 
 const today = new Date().toISOString().slice(0, 10);
 const defaultStart = today;
 const defaultEnd = today;
 
-function buildTxtFromList(list, startDate, endDate) {
-  const lines = [];
-  list.forEach((c, i) => {
-    lines.push(`=== Conversation ${i + 1} ===`);
+const MAX_TRANSCRIPT_FILES = 17; // 17 transcript files + 1 summary = 18 files max for LLM
+
+const DEFAULT_SME_REPS = [
+  'Joe Lines',
+  'Alex Patt',
+  'Chinyere Hatton',
+  'Robin McMichael',
+  'Zara Tarfiee',
+];
+
+function transcriptFileName(index) {
+  return `transcript-${index + 1}.txt`;
+}
+
+/** Build summary.txt: lists every call and which transcript file it's in. */
+function buildSummaryTxt(calls, fileIndexForCall, numTranscriptFiles, isSmeCall) {
+  const lines = [
+    'Transcript export summary',
+    `Total calls: ${calls.length}`,
+    `Transcript files: ${numTranscriptFiles} (transcript-1.txt through transcript-${numTranscriptFiles}.txt)`,
+    '',
+    'Each call is listed below with its transcript file. SME = Small/Medium Enterprise call (by rep).',
+    '',
+  ];
+  calls.forEach((c, i) => {
+    const file = transcriptFileName(fileIndexForCall(i));
+    const sme = isSmeCall ? isSmeCall(c) : false;
+    lines.push('---');
+    lines.push(`File: ${file}`);
+    lines.push(`SME: ${sme ? 'Yes' : 'No'}`);
     lines.push(`Date: ${c.date || '—'}`);
     lines.push(`Title: ${c.title || '—'}`);
     lines.push(`Rep: ${c.rep || '—'}`);
     lines.push(`Account: ${c.account || '—'}`);
     lines.push(`Deal stage: ${c.deal_stage || '—'}`);
-    lines.push(`Words: ${c.word_count ?? 0} | Chars: ${c.char_count ?? 0}`);
+    lines.push(`Words: ${c.word_count ?? 0}`);
+    lines.push(`Chars: ${c.char_count ?? 0}`);
     lines.push(`Conversation ID: ${c.conversationId || c.id || '—'}`);
     lines.push('');
-    const transcript = c.transcript && c.transcript !== '[No transcript]' ? c.transcript : '[No transcript]';
-    lines.push(transcript);
-    lines.push('');
   });
+  return lines.join('\n');
+}
+
+/** Content for one call (header + transcript) for inclusion in a batched file. */
+function buildOneCallBlock(c, conversationNumber, isSme) {
+  const lines = [];
+  lines.push(`=== Conversation ${conversationNumber} ===`);
+  lines.push(`SME: ${isSme ? 'Yes' : 'No'}`);
+  lines.push(`Date: ${c.date || '—'}`);
+  lines.push(`Title: ${c.title || '—'}`);
+  lines.push(`Rep: ${c.rep || '—'}`);
+  lines.push(`Account: ${c.account || '—'}`);
+  lines.push(`Deal stage: ${c.deal_stage || '—'}`);
+  lines.push(`Conversation ID: ${c.conversationId || c.id || '—'}`);
+  lines.push('');
+  const transcript = c.transcript && c.transcript !== '[No transcript]' ? c.transcript : '[No transcript]';
+  lines.push(transcript);
   return lines.join('\n');
 }
 
@@ -36,43 +78,105 @@ export default function ExportTranscriptsPage() {
   const [repFilter, setRepFilter] = useState('');
   const [accountFilter, setAccountFilter] = useState('');
   const [dealStageFilter, setDealStageFilter] = useState('');
+  const [fetchProgress, setFetchProgress] = useState(null);
+  const [smeRepList, setSmeRepList] = useState(() => [...DEFAULT_SME_REPS]);
+  const [smeRepCustomInput, setSmeRepCustomInput] = useState('');
+  const [smeFilter, setSmeFilter] = useState('all'); // 'all' | 'sme' | 'non-sme'
 
-  const fetchTranscripts = async () => {
+  const streamCompletedRef = useRef(false);
+
+  const smeRepSet = useMemo(() => {
+    return new Set(smeRepList.map((s) => s.trim().toLowerCase()).filter(Boolean));
+  }, [smeRepList]);
+
+  const addSmeRep = (name) => {
+    const n = (name || '').trim();
+    if (!n) return;
+    const lower = n.toLowerCase();
+    if (smeRepList.some((r) => r.trim().toLowerCase() === lower)) return;
+    setSmeRepList((prev) => [...prev, n]);
+    setSmeRepCustomInput('');
+  };
+
+  const removeSmeRep = (index) => {
+    setSmeRepList((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const isSmeCall = (c) => smeRepSet.has((c.rep ?? '').trim().toLowerCase());
+
+  const fetchTranscripts = () => {
     setFetchError(null);
     setFetchStatus('running');
     setList(null);
-    try {
-      const params = new URLSearchParams({ startDate, endDate, format: 'json', attachment: '0' });
-      const res = await fetch(`/export-transcripts?${params}`);
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        setFetchError(data.error || res.statusText);
+    setFetchProgress({ current: 0, total: 0 });
+    streamCompletedRef.current = false;
+    const params = new URLSearchParams({ startDate, endDate });
+    const es = new EventSource(`/export-transcripts-stream?${params}`);
+    es.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'progress') {
+          setFetchProgress({ current: data.current, total: data.total });
+        } else if (data.type === 'done') {
+          streamCompletedRef.current = true;
+          const arr = Array.isArray(data.conversations) ? data.conversations : [];
+          setList(arr);
+          setSelectedIds(new Set(arr.map((c) => c.conversationId || c.id)));
+          setFetchStatus('done');
+          setFetchProgress(null);
+          es.close();
+        } else if (data.type === 'error') {
+          streamCompletedRef.current = true;
+          setFetchError(data.error || 'Fetch failed');
+          setFetchStatus('error');
+          setFetchProgress(null);
+          es.close();
+        }
+      } catch (e) {
+        streamCompletedRef.current = true;
+        setFetchError(e.message || 'Invalid response');
         setFetchStatus('error');
-        return;
+        setFetchProgress(null);
+        es.close();
       }
-      const data = await res.json();
-      const arr = Array.isArray(data) ? data : [];
-      setList(arr);
-      setSelectedIds(new Set(arr.map((c) => c.conversationId || c.id)));
-      setFetchStatus('done');
-    } catch (e) {
-      setFetchError(e.message || 'Fetch failed');
+    };
+    es.onerror = () => {
+      es.close();
+      if (streamCompletedRef.current) return;
+      setFetchError('Connection lost or server error');
       setFetchStatus('error');
-    }
+      setFetchProgress(null);
+    };
   };
 
-  const downloadTxt = () => {
+  const downloadZip = async () => {
     if (!list || list.length === 0) return;
-    const toExport = selectedIds.size > 0
-      ? list.filter((c) => selectedIds.has(c.conversationId || c.id))
-      : list;
+    const toExport =
+      selectedIds.size > 0 ? list.filter((c) => selectedIds.has(c.conversationId || c.id)) : list;
     if (toExport.length === 0) return;
-    const body = buildTxtFromList(toExport, startDate, endDate);
-    const blob = new Blob([body], { type: 'text/plain;charset=utf-8' });
+
+    const n = toExport.length;
+    const numTranscriptFiles = Math.min(MAX_TRANSCRIPT_FILES, n);
+    const chunkSize = Math.ceil(n / numTranscriptFiles);
+    const fileIndexForCall = (callIndex) => Math.min(Math.floor(callIndex / chunkSize), numTranscriptFiles - 1);
+
+    const zip = new JSZip();
+    zip.file('summary.txt', buildSummaryTxt(toExport, fileIndexForCall, numTranscriptFiles, isSmeCall), { createFolders: false });
+
+    for (let f = 0; f < numTranscriptFiles; f++) {
+      const start = f * chunkSize;
+      const end = Math.min(start + chunkSize, n);
+      const chunk = toExport.slice(start, end);
+      const parts = chunk.map((c, i) => buildOneCallBlock(c, start + i + 1, isSmeCall(c)));
+      const content = parts.join('\n\n');
+      zip.file(transcriptFileName(f), content, { createFolders: false });
+    }
+
+    const blob = await zip.generateAsync({ type: 'blob' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `transcripts-${startDate}-to-${endDate}.txt`;
+    a.download = `transcripts-${startDate}-to-${endDate}.zip`;
     a.click();
     URL.revokeObjectURL(url);
     setDownloadDone(true);
@@ -103,6 +207,8 @@ export default function ExportTranscriptsPage() {
       if (dealStageFilter.trim()) {
         if (!dealStage.includes(dealStageFilter.trim().toLowerCase())) return false;
       }
+      if (smeFilter === 'sme' && !isSmeCall(c)) return false;
+      if (smeFilter === 'non-sme' && isSmeCall(c)) return false;
       return true;
     });
 
@@ -122,7 +228,7 @@ export default function ExportTranscriptsPage() {
       <section className="card">
         <div className="card-header">
           <h2>Export raw transcripts</h2>
-          <p>Two steps: 1) Fetch transcripts for the date range and review the list. 2) Download the full raw transcripts as a plain-text file (ideal for LLMs). No pricing analysis.</p>
+          <p>Two steps: 1) Fetch transcripts for the date range and review the list. 2) Download a .zip containing summary.txt (index of all calls) and one .txt file per call (easy for LLMs to parse). No pricing analysis.</p>
         </div>
         <div className="controls">
           <div className="control-group">
@@ -139,16 +245,45 @@ export default function ExportTranscriptsPage() {
           <button
             type="button"
             className="btn btn-secondary"
-            onClick={downloadTxt}
+            onClick={downloadZip}
             disabled={!list || list.length === 0 || (selectedIds.size === 0 && list.length > 0)}
           >
-            2) Download .txt {selectedIds.size > 0 ? `(${selectedIds.size} selected)` : ''}
+            2) Download .zip {selectedIds.size > 0 ? `(${selectedIds.size} selected)` : ''}
           </button>
         </div>
         {fetchError && <div className="alert alert-error">{fetchError}</div>}
+        {fetchStatus === 'running' && (
+          <div className="fetch-progress" style={{ marginTop: '1rem', marginBottom: '1rem', marginLeft: '1.25rem', marginRight: '1.25rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
+              <span className="spinner" style={{ width: 20, height: 20, borderWidth: 2 }} aria-hidden />
+              <span>
+                Loading transcripts: {fetchProgress?.current ?? 0} / {fetchProgress?.total ?? '…'}
+              </span>
+            </div>
+            {fetchProgress?.total > 0 && (
+              <div
+                style={{
+                  height: 6,
+                  borderRadius: 3,
+                  backgroundColor: 'var(--border, #e0e0e0)',
+                  overflow: 'hidden',
+                }}
+              >
+                <div
+                  style={{
+                    height: '100%',
+                    width: `${Math.round((100 * (fetchProgress.current || 0)) / fetchProgress.total)}%`,
+                    backgroundColor: 'var(--primary, #2563eb)',
+                    transition: 'width 0.2s ease',
+                  }}
+                />
+              </div>
+            )}
+          </div>
+        )}
         {downloadDone && (
           <div className="alert alert-info" style={{ marginLeft: '1.25rem', marginRight: '1.25rem' }}>
-            Downloaded. Check your downloads folder (full raw transcripts in .txt).
+            Downloaded. Check your downloads folder (.zip with summary.txt and one .txt per call).
           </div>
         )}
       </section>
@@ -158,63 +293,151 @@ export default function ExportTranscriptsPage() {
           <div className="card-header">
             <h2>Pre-screen transcripts</h2>
             <p>
-              {list.length} conversation{list.length !== 1 ? 's' : ''} with transcripts. Filter by word count, then choose which to include in the download. Only selected rows are exported.
+              {list.length} conversation{list.length !== 1 ? 's' : ''} in date range.
+              {(() => {
+                const withTranscript = list.filter((c) => (c.word_count ?? 0) > 0 || (c.transcript && c.transcript !== '[No transcript]')).length;
+                return withTranscript < list.length
+                  ? ` ${withTranscript} with transcript, ${list.length - withTranscript} without (metadata only).`
+                  : ' Set SME reps, filter, then choose which to include. Only selected rows are exported.';
+              })()}
             </p>
           </div>
-          <div className="controls" style={{ flexWrap: 'wrap', gap: '0.75rem', marginBottom: '1rem' }}>
-            <div className="control-group">
-              <label>Rep</label>
-              <input
-                type="text"
-                placeholder="Filter by rep…"
-                value={repFilter}
-                onChange={(e) => setRepFilter(e.target.value)}
-                style={{ width: '10rem' }}
-              />
+          <div className="prescreen-options">
+            <div className="prescreen-section">
+              <h3 className="prescreen-section-title">SME / Non-SME</h3>
+              <div className="prescreen-row" style={{ alignItems: 'flex-start' }}>
+                <div className="sme-reps-block">
+                  <label className="sme-reps-label">SME reps (calls with these reps = SME)</label>
+                  <div className="sme-reps-chips">
+                    {smeRepList.map((name, i) => (
+                      <span key={`${name}-${i}`} className="sme-rep-chip">
+                        <span className="sme-rep-chip-name">{name}</span>
+                        <button
+                          type="button"
+                          className="sme-rep-chip-remove"
+                          onClick={() => removeSmeRep(i)}
+                          aria-label={`Remove ${name}`}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                  <div className="sme-reps-add">
+                    <select
+                      className="sme-reps-dropdown"
+                      value=""
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (v) addSmeRep(v);
+                        e.target.value = '';
+                      }}
+                      aria-label="Add SME rep"
+                    >
+                      <option value="">Add rep…</option>
+                      {DEFAULT_SME_REPS.filter((n) => !smeRepSet.has(n.toLowerCase())).map((n) => (
+                        <option key={n} value={n}>
+                          {n}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="sme-reps-add-custom">
+                      <input
+                        type="text"
+                        placeholder="Or type name"
+                        value={smeRepCustomInput}
+                        onChange={(e) => setSmeRepCustomInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            addSmeRep(smeRepCustomInput);
+                          }
+                        }}
+                        className="sme-reps-custom-input"
+                        aria-label="Add custom rep name"
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-secondary sme-reps-add-btn"
+                        onClick={() => addSmeRep(smeRepCustomInput)}
+                      >
+                        Add
+                      </button>
+                    </span>
+                  </div>
+                </div>
+                <div className="control-group">
+                  <label>Show</label>
+                  <select
+                    value={smeFilter}
+                    onChange={(e) => setSmeFilter(e.target.value)}
+                    style={{ minWidth: '10rem' }}
+                  >
+                    <option value="all">All calls</option>
+                    <option value="sme">SME only</option>
+                    <option value="non-sme">Non-SME only</option>
+                  </select>
+                </div>
+              </div>
             </div>
-            <div className="control-group">
-              <label>Account</label>
-              <input
-                type="text"
-                placeholder="Filter by account…"
-                value={accountFilter}
-                onChange={(e) => setAccountFilter(e.target.value)}
-                style={{ width: '10rem' }}
-              />
+            <div className="prescreen-section">
+              <h3 className="prescreen-section-title">Filters</h3>
+              <div className="prescreen-row">
+                <div className="control-group">
+                  <label>Rep</label>
+                  <input
+                    type="text"
+                    placeholder="Filter by rep…"
+                    value={repFilter}
+                    onChange={(e) => setRepFilter(e.target.value)}
+                    style={{ width: '11rem' }}
+                  />
+                </div>
+                <div className="control-group">
+                  <label>Account</label>
+                  <input
+                    type="text"
+                    placeholder="Filter by account…"
+                    value={accountFilter}
+                    onChange={(e) => setAccountFilter(e.target.value)}
+                    style={{ width: '11rem' }}
+                  />
+                </div>
+                <div className="control-group">
+                  <label>Deal stage</label>
+                  <input
+                    type="text"
+                    placeholder="Filter by deal stage…"
+                    value={dealStageFilter}
+                    onChange={(e) => setDealStageFilter(e.target.value)}
+                    style={{ width: '11rem' }}
+                  />
+                </div>
+                <div className="control-group">
+                  <label>Min words</label>
+                  <input
+                    type="number"
+                    min={0}
+                    placeholder="Any"
+                    value={minWords}
+                    onChange={(e) => setMinWords(e.target.value)}
+                    style={{ width: '5.5rem' }}
+                  />
+                </div>
+                <div className="control-group">
+                  <label>Max words</label>
+                  <input
+                    type="number"
+                    min={0}
+                    placeholder="Any"
+                    value={maxWords}
+                    onChange={(e) => setMaxWords(e.target.value)}
+                    style={{ width: '5.5rem' }}
+                  />
+                </div>
+              </div>
             </div>
-            <div className="control-group">
-              <label>Deal stage</label>
-              <input
-                type="text"
-                placeholder="Filter by deal stage…"
-                value={dealStageFilter}
-                onChange={(e) => setDealStageFilter(e.target.value)}
-                style={{ width: '10rem' }}
-              />
-            </div>
-            <div className="control-group">
-              <label>Min words</label>
-              <input
-                type="number"
-                min={0}
-                placeholder="Any"
-                value={minWords}
-                onChange={(e) => setMinWords(e.target.value)}
-                style={{ width: '6rem' }}
-              />
-            </div>
-            <div className="control-group">
-              <label>Max words</label>
-              <input
-                type="number"
-                min={0}
-                placeholder="Any"
-                value={maxWords}
-                onChange={(e) => setMaxWords(e.target.value)}
-                style={{ width: '6rem' }}
-              />
-            </div>
-            <div className="control-group" style={{ alignSelf: 'flex-end' }}>
+            <div className="prescreen-actions">
               <button type="button" className="btn btn-secondary" onClick={selectAll}>
                 Select all visible
               </button>
@@ -231,6 +454,8 @@ export default function ExportTranscriptsPage() {
                   <th>Date</th>
                   <th>Title</th>
                   <th>Rep</th>
+                  <th>SME</th>
+                  <th>Transcript</th>
                   <th>Account</th>
                   <th>Deal stage</th>
                   <th style={{ textAlign: 'right' }}>Words</th>
@@ -242,6 +467,8 @@ export default function ExportTranscriptsPage() {
                 {(filteredList || list).map((c, i) => {
                   const id = c.conversationId || c.id;
                   const checked = selectedIds.has(id);
+                  const sme = isSmeCall(c);
+                  const hasTranscript = (c.word_count ?? 0) > 0 || (c.transcript && c.transcript !== '[No transcript]');
                   return (
                     <tr key={id || i}>
                       <td>
@@ -257,6 +484,8 @@ export default function ExportTranscriptsPage() {
                         {c.title ?? '—'}
                       </td>
                       <td>{c.rep ?? '—'}</td>
+                      <td>{sme ? 'Yes' : 'No'}</td>
+                      <td>{hasTranscript ? 'Yes' : 'No'}</td>
                       <td>{c.account ?? '—'}</td>
                       <td>{c.deal_stage ?? '—'}</td>
                       <td style={{ textAlign: 'right' }}>{(c.word_count ?? 0).toLocaleString()}</td>

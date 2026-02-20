@@ -450,11 +450,14 @@ export async function fetchConversationsWithTranscripts(apiKey, startDate, endDa
     console.log(`[salesloft] Capping to ${max} conversations (found ${list.length})`);
   }
   const results = [];
+  const onProgress = options.onProgress;
+  if (onProgress) onProgress(0, capped.length);
   for (let i = 0; i < capped.length; i++) {
     const c = capped[i];
     if (capped.length > 5 && i > 0 && i % 10 === 0) {
       console.log(`[salesloft] Transcript progress: ${i}/${capped.length}`);
     }
+    if (onProgress) onProgress(i + 1, capped.length);
     const { transcript, rep, account, deal_stage } = await getConversationTranscript(apiKey, c.id);
     const text = (transcript && transcript.trim()) ? transcript.trim() : '[No transcript]';
     const charCount = text !== '[No transcript]' ? text.length : 0;

@@ -65,6 +65,44 @@ app.get('/salesloft-calls', async (req, res) => {
   }
 });
 
+/** GET /export-transcripts-stream — SSE stream: progress events then done with conversations. Used by client for loading indicator. */
+app.get('/export-transcripts-stream', async (req, res) => {
+  const startDate = req.query.startDate || '';
+  const endDate = req.query.endDate || '';
+  if (!startDate || !endDate) {
+    return res.status(400).json({ error: 'Query params startDate and endDate required (YYYY-MM-DD)' });
+  }
+  const apiKey = (req.query.apiKey || process.env.SALESLOFT_API_KEY || '').trim();
+  if (!apiKey) {
+    return res.status(400).json({ error: 'Salesloft API key required. Set in .env as SALESLOFT_API_KEY.' });
+  }
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
+
+  const send = (obj) => {
+    res.write(`data: ${JSON.stringify(obj)}\n\n`);
+    res.flush?.();
+  };
+
+  try {
+    const conversations = await fetchConversationsWithTranscripts(apiKey, startDate, endDate, {
+      maxConversations: Infinity,
+      onProgress(current, total) {
+        send({ type: 'progress', current, total });
+      },
+    });
+    send({ type: 'done', conversations });
+  } catch (err) {
+    console.error('[server] /export-transcripts-stream error:', err.message);
+    send({ type: 'error', error: err.message || 'Fetch failed' });
+  } finally {
+    res.end();
+  }
+});
+
 /** GET /export-transcripts — fetch raw transcripts for date range. ?format=txt (default, best for LLM) or ?format=json. */
 app.get('/export-transcripts', async (req, res) => {
   try {
