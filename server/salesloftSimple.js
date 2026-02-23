@@ -22,15 +22,17 @@ export async function listCalls(apiKey, startDate, endDate) {
   const lte = `${endDate}T23:59:59.999Z`;
   const all = [];
   let page = 1;
-  let useDateFilter = true;
+  // Use updated_at for API filter so we include conversations that lack occurred_at (e.g. Vu Jade 4465057c).
+  // Display date is still occurred_at ?? updated_at ?? created_at so "call date" shows when available.
+  let dateFilter = 'updated_at'; // 'updated_at' | null (422 = endpoint may not support filter)
 
   while (true) {
     const url = new URL(`${SALESLOFT_BASE}/conversations`);
     url.searchParams.set('per_page', String(PER_PAGE));
     url.searchParams.set('page', String(page));
-    if (useDateFilter) {
-      url.searchParams.set('updated_at[gte]', gte);
-      url.searchParams.set('updated_at[lte]', lte);
+    if (dateFilter) {
+      url.searchParams.set(`${dateFilter}[gte]`, gte);
+      url.searchParams.set(`${dateFilter}[lte]`, lte);
     }
 
     console.log('[salesloft] GET', url.toString());
@@ -42,8 +44,8 @@ export async function listCalls(apiKey, startDate, endDate) {
     if (!res.ok) {
       const text = await res.text();
       if (res.status === 401) throw new Error('Invalid Salesloft API key (401). Check .env');
-      if (res.status === 422 && useDateFilter) {
-        useDateFilter = false;
+      if (res.status === 422 && dateFilter) {
+        dateFilter = null;
         page = 1;
         continue;
       }
@@ -55,7 +57,8 @@ export async function listCalls(apiKey, startDate, endDate) {
     const items = Array.isArray(list) ? list : [];
 
     for (const c of items) {
-      const dateStr = (c.updated_at ?? c.created_at ?? c.occurred_at ?? '').toString().slice(0, 10);
+      // Prefer occurred_at for display/filter so "call date" matches when the call actually happened
+      const dateStr = (c.occurred_at ?? c.updated_at ?? c.created_at ?? '').toString().slice(0, 10);
       if (!dateStr || dateStr < startDate || dateStr > endDate) continue;
       const title =
         c.title ??
@@ -314,6 +317,8 @@ export async function getConversationTranscript(apiKey, conversationId) {
     }
   } catch (_) {}
 
+  const normId = (id) => (id == null ? '' : String(id).trim().toLowerCase());
+
   try {
     const listUrl = new URL(`${SALESLOFT_BASE}/transcriptions`);
     listUrl.searchParams.set('per_page', '100');
@@ -323,7 +328,12 @@ export async function getConversationTranscript(apiKey, conversationId) {
       const listJson = await listRes.json();
       const list = listJson.data ?? listJson.results ?? listJson.transcriptions ?? [];
       const arr = Array.isArray(list) ? list : [];
-      const trans = arr.find((t) => String(t.conversation_id ?? t.conversation?.id ?? '') === String(conversationId)) ?? arr[0];
+      const want = normId(conversationId);
+      const trans =
+        arr.find(
+          (t) =>
+            normId(t.conversation_id ?? t.conversation?.id ?? t.conversation_guid ?? '') === want
+        ) ?? arr[0];
       if (trans && (trans.id ?? trans.transcription_id)) {
         const tid = String(trans.id ?? trans.transcription_id);
         const text = await fetchTranscriptById(key, tid);
@@ -340,7 +350,10 @@ export async function getConversationTranscript(apiKey, conversationId) {
       const listJson = await listRes.json();
       const list = listJson.data ?? listJson.results ?? listJson.transcriptions ?? [];
       const arr = Array.isArray(list) ? list : [];
-      const trans = arr.find((t) => String(t.conversation_id ?? t.conversation?.id ?? '') === String(conversationId));
+      const want = normId(conversationId);
+      const trans = arr.find(
+        (t) => normId(t.conversation_id ?? t.conversation?.id ?? t.conversation_guid ?? '') === want
+      );
       if (trans && (trans.id ?? trans.transcription_id)) {
         const tid = String(trans.id ?? trans.transcription_id);
         const text = await fetchTranscriptById(key, tid);
