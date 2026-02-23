@@ -1,5 +1,6 @@
 import { useState, useRef, useMemo } from 'react';
 import JSZip from 'jszip';
+import { apiUrl } from '../api';
 
 const today = new Date().toISOString().slice(0, 10);
 const defaultStart = today;
@@ -111,7 +112,7 @@ export default function ExportTranscriptsPage() {
     setFetchProgress({ current: 0, total: 0 });
     streamCompletedRef.current = false;
     const params = new URLSearchParams({ startDate, endDate });
-    const es = new EventSource(`/export-transcripts-stream?${params}`);
+    const es = new EventSource(apiUrl(`/export-transcripts-stream?${params}`));
     es.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);

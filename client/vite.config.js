@@ -11,6 +11,12 @@ export default defineConfig({
       '/salesloft-calls': 'http://localhost:3001',
       '/export-transcripts': 'http://localhost:3001',
       '/export-transcripts-stream': 'http://localhost:3001',
+      '/rag/status': 'http://localhost:3001',
+      '/rag/build': {
+        target: 'http://localhost:3001',
+        timeout: 120000,
+      },
+      '/rag/chat': 'http://localhost:3001',
     },
   },
 });

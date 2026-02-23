@@ -16,6 +16,10 @@ export default function HomePage() {
           <span className="home-link-title">Export transcripts</span>
           <span className="home-link-desc">Download raw conversation transcripts as a text file for a date range (e.g. for use with an LLM).</span>
         </Link>
+        <Link to="/rag" className="home-link">
+          <span className="home-link-title">RAG chat</span>
+          <span className="home-link-desc">Fetch transcripts, build a searchable index, and chat with an AI that answers using only those transcripts as context.</span>
+        </Link>
       </div>
     </section>
   );

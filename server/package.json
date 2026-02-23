@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node --watch index.js",
-    "start": "node index.js",
+    "dev": "node --max-old-space-size=4096 --watch index.js",
+    "start": "node --max-old-space-size=4096 index.js",
     "test:integration": "node scripts/run-mock-analysis.js"
   },
   "dependencies": {

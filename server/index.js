@@ -3,12 +3,18 @@
  * POST /run-analysis, GET /insights, DELETE /insights
  */
 
+// Keep server up on unhandled rejections (e.g. during RAG build) and log instead of exiting
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[server] unhandledRejection:', reason);
+});
+
 import dotenv from 'dotenv';
 import express from 'express';
 import { getDbInstance, clearInsights, insertInsight, getAllInsights } from './db.js';
 import { listCalls, fetchConversationsWithTranscripts } from './salesloftSimple.js';
 import { extractPricingInsights, delayBetweenCalls } from './pricingExtractor.js';
 import { getMockInsight } from './mockExtractor.js';
+import { buildRag, ragChat, getRagStatus } from './rag.js';
 import { readFileSync, existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join, resolve } from 'path';
@@ -30,11 +36,17 @@ if (envPath) {
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-app.use(express.json());
+// Large payloads for RAG build (many transcripts)
+app.use(express.json({ limit: '20mb' }));
 
-// CORS for local Vite dev
+// CORS: allow Vite dev (localhost and 127.0.0.1) so "Failed to fetch" doesn't happen when origin differs
 app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', 'http://localhost:5173');
+  const origin = (req.headers.origin || '').toLowerCase();
+  const allowed =
+    origin === 'http://localhost:5173' ||
+    origin === 'http://127.0.0.1:5173' ||
+    /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+  if (allowed) res.setHeader('Access-Control-Allow-Origin', req.headers.origin);
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
@@ -165,6 +177,52 @@ app.get('/export-transcripts', async (req, res) => {
   }
 });
 
+/** GET /rag/status — whether RAG is built and how many chunks */
+app.get('/rag/status', (req, res) => {
+  try {
+    res.json(getRagStatus());
+  } catch (err) {
+    console.error('[server] /rag/status error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** POST /rag/build — chunk and embed transcripts, replace in-memory RAG index. Body: { transcripts: [...], openaiApiKey?: string } */
+app.post('/rag/build', async (req, res) => {
+  try {
+    const { transcripts = [], openaiApiKey } = req.body || {};
+    if (!Array.isArray(transcripts) || transcripts.length === 0) {
+      return res.status(400).json({ error: 'Body must include transcripts array with at least one item' });
+    }
+    const totalChars = transcripts.reduce((n, t) => n + (t.transcript || '').length, 0);
+    console.log('[server] /rag/build: transcripts=', transcripts.length, 'totalChars=', totalChars);
+    const result = await buildRag(transcripts, openaiApiKey);
+    console.log('[server] /rag/build: done, chunks=', result.chunks);
+    return res.json(result);
+  } catch (err) {
+    const message = err && typeof err === 'object' && err.message ? err.message : String(err);
+    console.error('[server] /rag/build error:', message);
+    if (err?.stack) console.error(err.stack);
+    const code = message.includes('OpenAI') || message.includes('API key') ? 400 : 500;
+    return res.status(code).json({ error: message });
+  }
+});
+
+/** POST /rag/chat — chat with RAG context. Body: { message: string, history?: [{ role, content }], openaiApiKey?: string, model?: string } */
+app.post('/rag/chat', async (req, res) => {
+  try {
+    const { message, history, openaiApiKey, model } = req.body || {};
+    if (!message || typeof message !== 'string' || !message.trim()) {
+      return res.status(400).json({ error: 'Body must include non-empty message' });
+    }
+    const result = await ragChat({ message: message.trim(), history: history || [], openaiApiKey, model });
+    res.json(result);
+  } catch (err) {
+    console.error('[server] /rag/chat error:', err.message);
+    res.status(err.message.includes('OpenAI') ? 400 : 500).json({ error: err.message });
+  }
+});
+
 /** Load mock calls when SALESLOFT_API_KEY is not set */
 function getMockCalls() {
   const path = join(__dirname, 'test-data', 'sample-transcripts.json');
@@ -278,6 +336,17 @@ app.delete('/insights', (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`[server] Listening on http://localhost:${PORT}`);
+// Catch body parse errors (e.g. payload too large, invalid JSON) so server does not crash
+app.use((err, req, res, next) => {
+  if (err) {
+    console.error('[server] middleware error:', err.message);
+    const status = err.status ?? err.statusCode ?? 500;
+    const isBody = err.type === 'entity.parse.failed' || err.message?.includes('body') || err.message?.includes('JSON');
+    return res.status(isBody ? 400 : status).json({ error: err.message || 'Request failed' });
+  }
+  next();
+});
+
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`[server] Listening on http://localhost:${PORT} (and http://127.0.0.1:${PORT})`);
 });

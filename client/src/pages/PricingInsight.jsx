@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { apiUrl } from '../api';
 
 const defaultStart = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 const defaultEnd = new Date().toISOString().slice(0, 10);
@@ -18,7 +19,7 @@ export default function PricingInsightPage() {
 
   const fetchInsights = async () => {
     try {
-      const res = await fetch('/insights');
+      const res = await fetch(apiUrl('/insights'));
       const data = await res.json().catch(() => []);
       setInsights(Array.isArray(data) ? data : []);
     } catch (_) {
@@ -36,7 +37,7 @@ export default function PricingInsightPage() {
     setCalls([]);
     try {
       const params = new URLSearchParams({ startDate, endDate });
-      const res = await fetch(`/salesloft-calls?${params}`);
+      const res = await fetch(apiUrl(`/salesloft-calls?${params}`));
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setError(data.error || res.statusText);
@@ -56,7 +57,7 @@ export default function PricingInsightPage() {
     setRunStatus('running');
     setRunResult(null);
     try {
-      const res = await fetch('/run-analysis', {
+      const res = await fetch(apiUrl('/run-analysis'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ startDate, endDate }),
