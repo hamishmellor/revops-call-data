@@ -1,7 +1,24 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { apiUrl } from '../api';
 
 const today = new Date().toISOString().slice(0, 10);
+
+const DEFAULT_SME_REPS = [
+  'Joe Lines',
+  'Alex Patt',
+  'Chinyere Hatton',
+  'Robin McMichael',
+  'Zara Tarfiee',
+];
+
+/** Render text with **bold** (and *italic*) as proper emphasis for assistant replies. */
+function renderMessageContent(content) {
+  if (typeof content !== 'string') return content;
+  const parts = content.split(/\*\*(.+?)\*\*/g);
+  return parts.map((part, i) =>
+    i % 2 === 1 ? <strong key={`b-${i}`}>{part}</strong> : part
+  );
+}
 
 export default function TranscriptRAGPage() {
   const [startDate, setStartDate] = useState(today);
@@ -24,8 +41,57 @@ export default function TranscriptRAGPage() {
   const [history, setHistory] = useState([]);
   const [chatStatus, setChatStatus] = useState('idle');
   const [chatError, setChatError] = useState(null);
+  const [transcriptsSectionOpen, setTranscriptsSectionOpen] = useState(true);
+  const [minWords, setMinWords] = useState('');
+  const [maxWords, setMaxWords] = useState('');
+  const [repFilter, setRepFilter] = useState('');
+  const [accountFilter, setAccountFilter] = useState('');
+  const [dealStageFilter, setDealStageFilter] = useState('');
+  const [smeFilter, setSmeFilter] = useState('all');
+  const [smeRepList, setSmeRepList] = useState(() => [...DEFAULT_SME_REPS]);
+  const [smeRepCustomInput, setSmeRepCustomInput] = useState('');
+  const [copiedConvId, setCopiedConvId] = useState(null);
+  const [showExtraColumns, setShowExtraColumns] = useState(false);
   const messagesEndRef = useRef(null);
   const streamCompletedRef = useRef(false);
+
+  const smeRepSet = useMemo(
+    () => new Set(smeRepList.map((s) => s.trim().toLowerCase()).filter(Boolean)),
+    [smeRepList]
+  );
+  const isSmeCall = (c) => smeRepSet.has((c.rep ?? '').trim().toLowerCase());
+
+  const filteredList = useMemo(() => {
+    if (!list) return null;
+    return list.filter((c) => {
+      const w = c.word_count ?? 0;
+      if (minWords !== '' && minWords != null) {
+        const min = Number(minWords);
+        if (!Number.isNaN(min) && w < min) return false;
+      }
+      if (maxWords !== '' && maxWords != null) {
+        const max = Number(maxWords);
+        if (!Number.isNaN(max) && w > max) return false;
+      }
+      const rep = (c.rep ?? '').toLowerCase();
+      const account = (c.account ?? '').toLowerCase();
+      const dealStage = (c.deal_stage ?? '').toLowerCase();
+      if (repFilter.trim() && !rep.includes(repFilter.trim().toLowerCase())) return false;
+      if (accountFilter.trim() && !account.includes(accountFilter.trim().toLowerCase())) return false;
+      if (dealStageFilter.trim() && !dealStage.includes(dealStageFilter.trim().toLowerCase())) return false;
+      if (smeFilter === 'sme' && !isSmeCall(c)) return false;
+      if (smeFilter === 'non-sme' && isSmeCall(c)) return false;
+      return true;
+    });
+  }, [list, minWords, maxWords, repFilter, accountFilter, dealStageFilter, smeFilter, smeRepSet]);
+
+  const addSmeRep = (name) => {
+    const n = (name || '').trim();
+    if (!n || smeRepList.some((r) => r.trim().toLowerCase() === n.toLowerCase())) return;
+    setSmeRepList((prev) => [...prev, n]);
+    setSmeRepCustomInput('');
+  };
+  const removeSmeRep = (index) => setSmeRepList((prev) => prev.filter((_, i) => i !== index));
 
   useEffect(() => {
     fetch(apiUrl('/rag/status'))
@@ -36,7 +102,7 @@ export default function TranscriptRAGPage() {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [history]);
+  }, [history, chatStatus]);
 
   const fetchTranscripts = () => {
     setFetchError(null);
@@ -140,6 +206,9 @@ export default function TranscriptRAGPage() {
       setLastBuildChunks(data.chunks);
       setLastBuildChunkStats(data.chunkStats || null);
       setBuildStatus('done');
+      setHistory([]);
+      setMessage('');
+      setChatError(null);
     } catch (err) {
       const msg = err.message || 'Build failed';
       const isNetwork =
@@ -206,12 +275,14 @@ export default function TranscriptRAGPage() {
     });
   };
   const selectAllWithTranscript = () => {
-    if (!list) return;
-    const ids = list
+    const source = filteredList || list;
+    if (!source) return;
+    const ids = source
       .filter((c) => (c.word_count ?? 0) > 0 || (c.transcript && c.transcript !== '[No transcript]'))
       .map((c) => c.conversationId || c.id);
     setSelectedIds(new Set(ids));
   };
+  const deselectAll = () => setSelectedIds(new Set());
 
   const selectedWithContent = list
     ? list.filter(
@@ -288,79 +359,292 @@ export default function TranscriptRAGPage() {
 
       {list && list.length > 0 && (
         <section className="card">
-          <div className="card-header">
-            <h2>Select transcripts for RAG</h2>
-            <p>
-              {list.length} conversation{list.length !== 1 ? 's' : ''} fetched. Select which to include in the search index. Only conversations with transcript content are useful.
-            </p>
-          </div>
-          <div style={{ padding: '1.25rem 1.25rem 1rem' }}>
-            <button type="button" className="btn btn-secondary" onClick={selectAllWithTranscript}>
-              Select all with transcript
-            </button>
-          </div>
-          <div className="table-wrap" style={{ margin: '0 1.25rem 1.25rem' }}>
-            <table>
-              <thead>
-                <tr>
-                  <th style={{ width: 40 }}>Include</th>
-                  <th>Date</th>
-                  <th>Title / Account</th>
-                  <th>Rep</th>
-                  <th>Words</th>
-                </tr>
-              </thead>
-              <tbody>
-                {list.map((c) => {
-                  const id = c.conversationId || c.id;
-                  const hasContent = (c.word_count ?? 0) > 0 || (c.transcript && c.transcript !== '[No transcript]');
-                  return (
-                    <tr key={id}>
-                      <td>
-                        <input
-                          type="checkbox"
-                          checked={selectedIds.has(id)}
-                          onChange={() => toggleSelect(id)}
-                          disabled={!hasContent}
-                          aria-label={`Include ${c.title || id}`}
-                        />
-                      </td>
-                      <td>{c.date || '—'}</td>
-                      <td>{c.title || c.account || '—'}</td>
-                      <td>{c.rep || '—'}</td>
-                      <td className="mono">{c.word_count ?? 0}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          <div style={{ padding: '1rem 1.25rem 1.25rem', borderTop: '1px solid var(--modulr-border)' }}>
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={() => buildRag()}
-              disabled={buildStatus === 'running' || selectedWithContent === 0}
-              title={selectedWithContent === 0 ? 'Select one or more transcripts with content above' : undefined}
-            >
-              {buildStatus === 'running' ? 'Building RAG…' : 'Build RAG'}
-            </button>
-            {buildError && <div className="alert alert-error" style={{ marginTop: '0.75rem' }}>{buildError}</div>}
-            {ragStatus.built && (
-              <div style={{ marginTop: '0.5rem', fontSize: '0.875rem', color: 'var(--modulr-success)' }}>
-                <p>
-                  {lastBuildChunks != null
-                    ? `RAG ready (${lastBuildChunks} chunks) from the selected transcripts above. You can chat below.`
-                    : `A RAG is already loaded (${ragStatus.chunkCount} chunks). Build RAG above to replace it with your selection, then chat below.`}
+          <div
+            className="card-header"
+            style={{ cursor: 'pointer', userSelect: 'none' }}
+            onClick={() => setTranscriptsSectionOpen((o) => !o)}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setTranscriptsSectionOpen((o) => !o); } }}
+            aria-expanded={transcriptsSectionOpen}
+          >
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem' }}>
+              <span style={{ fontSize: '0.875rem', marginTop: '0.25rem' }} aria-hidden>
+                {transcriptsSectionOpen ? '▼' : '▶'}
+              </span>
+              <div style={{ flex: 1 }}>
+                <h2 style={{ margin: 0 }}>Select transcripts for RAG</h2>
+                <p style={{ margin: '0.35rem 0 0', fontSize: '0.875rem' }}>
+                  {list.length} conversation{list.length !== 1 ? 's' : ''} fetched. Select which to include in the search index. Only conversations with transcript content are useful.
                 </p>
-                {lastBuildChunkStats && (
-                  <p style={{ marginTop: '0.35rem', fontSize: '0.8rem', color: 'var(--modulr-text-muted)' }}>
-                    Chunking: {lastBuildChunkStats.totalChunks} chunks from {lastBuildChunkStats.transcriptCount} transcript{lastBuildChunkStats.transcriptCount !== 1 ? 's' : ''}; avg length {lastBuildChunkStats.avgChunkLength} chars (min {lastBuildChunkStats.minChunkLength}, max {lastBuildChunkStats.maxChunkLength}). Strategy: 800 chars with 200 overlap.
-                  </p>
+              </div>
+            </div>
+          </div>
+          {transcriptsSectionOpen && (
+            <>
+              <div style={{ padding: '1.25rem 1.25rem 0', marginBottom: '0.5rem' }}>
+                <div className="prescreen-section">
+                  <h3 className="prescreen-section-title">Filters</h3>
+                  <div className="prescreen-row">
+                    <div className="control-group">
+                      <label>Rep</label>
+                      <input
+                        type="text"
+                        placeholder="Filter by rep…"
+                        value={repFilter}
+                        onChange={(e) => setRepFilter(e.target.value)}
+                        style={{ width: '11rem' }}
+                      />
+                    </div>
+                    <div className="control-group">
+                      <label>Account</label>
+                      <input
+                        type="text"
+                        placeholder="Filter by account…"
+                        value={accountFilter}
+                        onChange={(e) => setAccountFilter(e.target.value)}
+                        style={{ width: '11rem' }}
+                      />
+                    </div>
+                    <div className="control-group">
+                      <label>Deal stage</label>
+                      <input
+                        type="text"
+                        placeholder="Filter by deal stage…"
+                        value={dealStageFilter}
+                        onChange={(e) => setDealStageFilter(e.target.value)}
+                        style={{ width: '11rem' }}
+                      />
+                    </div>
+                    <div className="control-group">
+                      <label>Min words</label>
+                      <input
+                        type="number"
+                        min={0}
+                        placeholder="Any"
+                        value={minWords}
+                        onChange={(e) => setMinWords(e.target.value)}
+                        style={{ width: '5.5rem' }}
+                      />
+                    </div>
+                    <div className="control-group">
+                      <label>Max words</label>
+                      <input
+                        type="number"
+                        min={0}
+                        placeholder="Any"
+                        value={maxWords}
+                        onChange={(e) => setMaxWords(e.target.value)}
+                        style={{ width: '5.5rem' }}
+                      />
+                    </div>
+                  </div>
+                </div>
+                <div className="prescreen-section">
+                  <h3 className="prescreen-section-title">SME / Non-SME</h3>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
+                    <span style={{ fontSize: '0.8125rem', color: 'var(--modulr-text-muted)' }}>SME reps</span>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', alignItems: 'center' }}>
+                      {smeRepList.map((name, i) => (
+                        <span
+                          key={name}
+                          className="sme-rep-chip"
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.2rem',
+                            padding: '0.25rem 0.5rem',
+                            borderRadius: 'var(--radius)',
+                            background: 'var(--modulr-surface)',
+                            border: '1px solid var(--modulr-border)',
+                            fontSize: '0.8125rem',
+                          }}
+                        >
+                          {name}
+                          <button
+                            type="button"
+                            onClick={() => removeSmeRep(i)}
+                            aria-label={`Remove ${name}`}
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, lineHeight: 1, color: 'var(--modulr-text-muted)', fontSize: '1.1em' }}
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem' }}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                      <select
+                        className="input-field"
+                        value=""
+                        onChange={(e) => { const v = e.target.value; if (v) addSmeRep(v); e.target.value = ''; }}
+                        style={{ width: '5.5rem', fontSize: '0.8125rem' }}
+                        aria-label="Add SME rep"
+                      >
+                        <option value="">Add…</option>
+                        {DEFAULT_SME_REPS.filter((n) => !smeRepSet.has(n.toLowerCase())).map((n) => (
+                          <option key={n} value={n}>{n}</option>
+                        ))}
+                      </select>
+                      <input
+                        type="text"
+                        className="input-field"
+                        placeholder="Or type name"
+                        value={smeRepCustomInput}
+                        onChange={(e) => setSmeRepCustomInput(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addSmeRep(smeRepCustomInput); } }}
+                        style={{ width: '7rem', fontSize: '0.8125rem' }}
+                        aria-label="Add custom rep name"
+                      />
+                      <button type="button" className="btn btn-secondary" style={{ fontSize: '0.8125rem' }} onClick={() => addSmeRep(smeRepCustomInput)}>
+                        Add
+                      </button>
+                    </span>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <span style={{ fontSize: '0.8125rem', color: 'var(--modulr-text-muted)' }}>Show</span>
+                      <select
+                        className="input-field"
+                        value={smeFilter}
+                        onChange={(e) => setSmeFilter(e.target.value)}
+                        style={{ width: 'auto', minWidth: '8rem', fontSize: '0.8125rem', padding: '0.4rem 0.6rem' }}
+                      >
+                        <option value="all">All calls</option>
+                        <option value="sme">SME only</option>
+                        <option value="non-sme">Non-SME only</option>
+                      </select>
+                    </span>
+                  </div>
+                </div>
+                <div className="prescreen-actions">
+                  <button type="button" className="btn btn-secondary" onClick={selectAllWithTranscript}>
+                    Select all with transcript (visible)
+                  </button>
+                  <button type="button" className="btn btn-secondary" onClick={deselectAll}>
+                    Deselect all
+                  </button>
+                  <span style={{ fontSize: '0.8125rem', color: 'var(--modulr-text-muted)' }}>
+                    {selectedIds.size} selected
+                  </span>
+                  {filteredList && filteredList.length < list.length && (
+                    <span style={{ fontSize: '0.8125rem', color: 'var(--modulr-text-muted)' }}>
+                      Showing {filteredList.length} of {list.length}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    style={{ fontSize: '0.8125rem', marginLeft: 'auto' }}
+                    onClick={() => setShowExtraColumns((v) => !v)}
+                  >
+                    {showExtraColumns ? 'Fewer columns' : 'More columns'}
+                  </button>
+                </div>
+              </div>
+              <div className="table-wrap" style={{ margin: '0 1.25rem 1.25rem' }}>
+                <table>
+                  <thead>
+                    <tr>
+                      <th style={{ width: '2.5rem' }}>Include</th>
+                      <th style={{ width: '8rem', whiteSpace: 'nowrap' }}>Date</th>
+                      <th style={{ minWidth: '18rem' }}>Title</th>
+                      <th>Account</th>
+                      <th style={{ width: '8rem', maxWidth: '8rem' }}>Rep</th>
+                      <th>Deal stage</th>
+                      <th>SME</th>
+                      <th className="mono">ID</th>
+                      {showExtraColumns && <th>Transcript</th>}
+                      {showExtraColumns && <th style={{ textAlign: 'right' }}>Words</th>}
+                      {showExtraColumns && <th style={{ textAlign: 'right' }}>Chars</th>}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(filteredList || list).map((c) => {
+                      const id = c.conversationId || c.id;
+                      const hasContent = (c.word_count ?? 0) > 0 || (c.transcript && c.transcript !== '[No transcript]');
+                      const sme = isSmeCall(c);
+                      return (
+                        <tr key={id}>
+                          <td>
+                            <input
+                              type="checkbox"
+                              checked={selectedIds.has(id)}
+                              onChange={() => toggleSelect(id)}
+                              disabled={!hasContent}
+                              aria-label={`Include ${c.title || id}`}
+                            />
+                          </td>
+                          <td style={{ whiteSpace: 'nowrap' }}>{c.date ?? '—'}</td>
+                          <td title={c.title || ''} style={{ maxWidth: '24rem', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.title ?? '—'}</td>
+                          <td>{c.account ?? '—'}</td>
+                          <td style={{ maxWidth: '8rem', overflow: 'hidden', textOverflow: 'ellipsis' }} title={c.rep || ''}>{c.rep ?? '—'}</td>
+                          <td>{c.deal_stage ?? '—'}</td>
+                          <td>{sme ? 'Yes' : 'No'}</td>
+                          <td className="mono" style={{ fontSize: '0.85em' }}>
+                            {id ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  navigator.clipboard?.writeText(id).then(() => {
+                                    setCopiedConvId(id);
+                                    setTimeout(() => setCopiedConvId(null), 1500);
+                                  });
+                                }}
+                                title="Click to copy full ID"
+                                style={{
+                                  background: 'none',
+                                  border: 'none',
+                                  padding: 0,
+                                  cursor: 'pointer',
+                                  color: 'inherit',
+                                  font: 'inherit',
+                                  textDecoration: copiedConvId === id ? 'none' : 'underline',
+                                  textDecorationStyle: 'dotted',
+                                }}
+                              >
+                                {copiedConvId === id ? 'Copied!' : (id.length <= 4 ? id : `${id.slice(0, 4)}…`)}
+                              </button>
+                            ) : (
+                              '—'
+                            )}
+                          </td>
+                          {showExtraColumns && <td>{hasContent ? 'Yes' : 'No'}</td>}
+                          {showExtraColumns && <td style={{ textAlign: 'right' }}>{(c.word_count ?? 0).toLocaleString()}</td>}
+                          {showExtraColumns && <td style={{ textAlign: 'right' }}>{(c.char_count ?? 0).toLocaleString()}</td>}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ padding: '1rem 1.25rem 1.25rem', borderTop: '1px solid var(--modulr-border)' }}>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => buildRag()}
+                  disabled={buildStatus === 'running' || selectedWithContent === 0}
+                  title={selectedWithContent === 0 ? 'Select one or more transcripts with content above' : undefined}
+                >
+                  {buildStatus === 'running' ? 'Building RAG…' : 'Build RAG'}
+                </button>
+                {buildError && <div className="alert alert-error" style={{ marginTop: '0.75rem' }}>{buildError}</div>}
+                {ragStatus.built && (
+                  <div style={{ marginTop: '0.5rem', fontSize: '0.875rem', color: 'var(--modulr-success)' }}>
+                    <p>
+                      {lastBuildChunks != null
+                        ? `RAG ready (${lastBuildChunks} chunks) from the selected transcripts above. You can chat below.`
+                        : `A RAG is already loaded (${ragStatus.chunkCount} chunks). Build RAG above to replace it with your selection, then chat below.`}
+                    </p>
+                    {lastBuildChunkStats && (
+                      <p style={{ marginTop: '0.35rem', fontSize: '0.8rem', color: 'var(--modulr-text-muted)' }}>
+                        Chunking: {lastBuildChunkStats.totalChunks} chunks from {lastBuildChunkStats.transcriptCount} transcript{lastBuildChunkStats.transcriptCount !== 1 ? 's' : ''}; avg length {lastBuildChunkStats.avgChunkLength} chars (min {lastBuildChunkStats.minChunkLength}, max {lastBuildChunkStats.maxChunkLength}). Strategy: 800 chars with 200 overlap.
+                      </p>
+                    )}
+                  </div>
                 )}
               </div>
-            )}
-          </div>
+            </>
+          )}
         </section>
       )}
 
@@ -442,9 +726,28 @@ export default function TranscriptRAGPage() {
                 }}
               >
                 <strong style={{ fontSize: '0.75rem', color: 'var(--modulr-text-muted)' }}>{m.role === 'user' ? 'You' : 'Assistant'}</strong>
-                <div style={{ whiteSpace: 'pre-wrap', marginTop: '0.35rem' }}>{m.content}</div>
+                <div style={{ whiteSpace: 'pre-wrap', marginTop: '0.35rem' }}>
+                  {m.role === 'assistant' ? renderMessageContent(m.content) : m.content}
+                </div>
               </div>
             ))}
+            {chatStatus === 'running' && (
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  marginBottom: '1rem',
+                  padding: '0.75rem 1rem',
+                  borderRadius: 'var(--radius)',
+                  background: 'var(--modulr-blue-light)',
+                  borderLeft: '4px solid var(--modulr-blue)',
+                }}
+              >
+                <span className="spinner" style={{ width: 18, height: 18, borderWidth: 2 }} aria-hidden />
+                <span style={{ fontSize: '0.875rem', color: 'var(--modulr-text-muted)' }}>Thinking…</span>
+              </div>
+            )}
             <div ref={messagesEndRef} />
           </div>
           {chatError && <div className="alert alert-error" style={{ marginBottom: '0.75rem' }}>{chatError}</div>}
