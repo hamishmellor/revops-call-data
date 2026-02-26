@@ -295,7 +295,7 @@ export default function TranscriptRAGPage() {
     : 0;
 
   return (
-    <div className="rag-page">
+    <div className="rag-page" style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
       <section className="card">
         <div className="card-header">
           <h2>RAG: Search transcripts with an LLM</h2>
@@ -650,15 +650,15 @@ export default function TranscriptRAGPage() {
       )}
 
       {ragStatus.built && (
-      <section className="card">
+      <section className="card" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         <div className="card-header">
           <h2>Chat over your transcripts</h2>
           <p>
             Ask questions in natural language. The AI will use only the transcript chunks you indexed, so answers are grounded in your Salesloft calls.
           </p>
         </div>
-        <div style={{ padding: '1.25rem' }}>
-          <div style={{ marginBottom: '1rem' }}>
+        <div style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+          <div style={{ marginBottom: '1rem', flexShrink: 0 }}>
             <label htmlFor="rag-chat-model" style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.875rem', color: 'var(--modulr-text-muted)' }}>Model</label>
             <select
               id="rag-chat-model"
@@ -700,8 +700,8 @@ export default function TranscriptRAGPage() {
           <div
             className="rag-chat-history"
             style={{
-              minHeight: 200,
-              maxHeight: 400,
+              flex: 1,
+              minHeight: 0,
               overflowY: 'auto',
               border: '1px solid var(--modulr-border)',
               borderRadius: 'var(--radius)',
@@ -806,8 +806,8 @@ export default function TranscriptRAGPage() {
             )}
             <div ref={messagesEndRef} />
           </div>
-          {chatError && <div className="alert alert-error" style={{ marginBottom: '0.75rem' }}>{chatError}</div>}
-          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end' }}>
+          {chatError && <div className="alert alert-error" style={{ marginBottom: '0.75rem', flexShrink: 0 }}>{chatError}</div>}
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end', flexShrink: 0 }}>
             <textarea
               className="input-field"
               placeholder="Ask about your transcripts…"
