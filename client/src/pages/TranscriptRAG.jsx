@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
+import ReactMarkdown from 'react-markdown';
 import { apiUrl } from '../api';
 
 const today = new Date().toISOString().slice(0, 10);
@@ -11,14 +12,6 @@ const DEFAULT_SME_REPS = [
   'Zara Tarfiee',
 ];
 
-/** Render text with **bold** (and *italic*) as proper emphasis for assistant replies. */
-function renderMessageContent(content) {
-  if (typeof content !== 'string') return content;
-  const parts = content.split(/\*\*(.+?)\*\*/g);
-  return parts.map((part, i) =>
-    i % 2 === 1 ? <strong key={`b-${i}`}>{part}</strong> : part
-  );
-}
 
 export default function TranscriptRAGPage() {
   const [startDate, setStartDate] = useState(today);
@@ -35,7 +28,7 @@ export default function TranscriptRAGPage() {
   const [lastBuildChunks, setLastBuildChunks] = useState(null);
   /** Chunk stats from last build (for verifying chunking strategy) */
   const [lastBuildChunkStats, setLastBuildChunkStats] = useState(null);
-  const [chatModel, setChatModel] = useState('gpt-4o-mini');
+  const [chatModel, setChatModel] = useState('gpt-5.2');
   const [chatModelCustom, setChatModelCustom] = useState('');
   const [message, setMessage] = useState('');
   const [history, setHistory] = useState([]);
@@ -244,7 +237,7 @@ export default function TranscriptRAGPage() {
         body: JSON.stringify({
           message: msg,
           history: history.map((m) => ({ role: m.role, content: m.content })),
-          model: chatModel === 'other' ? (chatModelCustom.trim() || 'gpt-4o-mini') : chatModel,
+          model: chatModel === 'other' ? (chatModelCustom.trim() || 'gpt-5.2') : chatModel,
         }),
       });
       const text = await res.text();
@@ -727,8 +720,12 @@ export default function TranscriptRAGPage() {
                 }}
               >
                 <strong style={{ fontSize: '0.75rem', color: 'var(--modulr-text-muted)' }}>{m.role === 'user' ? 'You' : 'Assistant'}</strong>
-                <div style={{ whiteSpace: 'pre-wrap', marginTop: '0.35rem' }}>
-                  {m.role === 'assistant' ? renderMessageContent(m.content) : m.content}
+                <div style={{ marginTop: '0.35rem' }} className={m.role === 'assistant' ? 'rag-chat-markdown' : ''}>
+                  {m.role === 'assistant' ? (
+                    <ReactMarkdown>{String(m.content ?? '')}</ReactMarkdown>
+                  ) : (
+                    <span style={{ whiteSpace: 'pre-wrap' }}>{m.content}</span>
+                  )}
                 </div>
                 {m.role === 'assistant' && m.chunks && m.chunks.length > 0 && (
                   <div style={{ marginTop: '0.5rem' }}>
