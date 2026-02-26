@@ -260,6 +260,7 @@ export async function ragChat({ message, history = [], openaiApiKey, model }) {
     return {
       reply:
         'There are no transcripts in the RAG index. Build RAG first: fetch transcripts, select the ones you want, then click Build RAG. If you already built it, the server may have restarted and cleared the index—build again.',
+      chunks: [],
     };
   }
 
@@ -272,6 +273,7 @@ export async function ragChat({ message, history = [], openaiApiKey, model }) {
     return {
       reply:
         'No relevant transcript chunks were found for your question. Try rephrasing, or check that your RAG was built from transcripts that contain relevant content.',
+      chunks: [],
     };
   }
 
@@ -297,6 +299,7 @@ export async function ragChat({ message, history = [], openaiApiKey, model }) {
     return {
       reply:
         'The retrieved transcript context was empty or too small. Try building RAG again with more transcripts, or rephrasing your question.',
+      chunks: [],
     };
   }
 
@@ -324,7 +327,22 @@ export async function ragChat({ message, history = [], openaiApiKey, model }) {
   const body = await res.json();
   if (!res.ok) throw new Error(body?.error?.message ?? body?.message ?? `HTTP ${res.status}`);
   const reply = body.choices?.[0]?.message?.content ?? '';
-  return { reply: reply || '(No response)' };
+  const chunksForClient = chunks.map((c) => {
+    const m = c.meta || {};
+    const text = (c.text || '').trim();
+    return {
+      meta: {
+        conversationId: m.conversationId,
+        title: m.title,
+        date: m.date,
+        rep: m.rep,
+        account: m.account,
+        deal_stage: m.deal_stage,
+      },
+      snippet: text.length > 180 ? text.slice(0, 180) + '…' : text,
+    };
+  });
+  return { reply: reply || '(No response)', chunks: chunksForClient };
 }
 
 export function getRagStatus() {

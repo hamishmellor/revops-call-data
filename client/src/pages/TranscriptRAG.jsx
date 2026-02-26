@@ -52,6 +52,7 @@ export default function TranscriptRAGPage() {
   const [smeRepCustomInput, setSmeRepCustomInput] = useState('');
   const [copiedConvId, setCopiedConvId] = useState(null);
   const [showExtraColumns, setShowExtraColumns] = useState(false);
+  const [expandedSources, setExpandedSources] = useState(() => new Set());
   const messagesEndRef = useRef(null);
   const streamCompletedRef = useRef(false);
 
@@ -257,7 +258,7 @@ export default function TranscriptRAGPage() {
         return;
       }
       if (!res.ok) throw new Error(data.error || 'Chat failed');
-      setHistory((h) => [...h, { role: 'assistant', content: data.reply }]);
+      setHistory((h) => [...h, { role: 'assistant', content: data.reply, chunks: data.chunks || [] }]);
       setChatStatus('idle');
     } catch (err) {
       setChatError(err.message || 'Chat failed');
@@ -729,6 +730,61 @@ export default function TranscriptRAGPage() {
                 <div style={{ whiteSpace: 'pre-wrap', marginTop: '0.35rem' }}>
                   {m.role === 'assistant' ? renderMessageContent(m.content) : m.content}
                 </div>
+                {m.role === 'assistant' && m.chunks && m.chunks.length > 0 && (
+                  <div style={{ marginTop: '0.5rem' }}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setExpandedSources((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(i)) next.delete(i);
+                          else next.add(i);
+                          return next;
+                        });
+                      }}
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        padding: 0,
+                        cursor: 'pointer',
+                        fontSize: '0.75rem',
+                        color: 'var(--modulr-text-muted)',
+                        textDecoration: 'underline',
+                        textDecorationStyle: 'dotted',
+                      }}
+                    >
+                      {expandedSources.has(i) ? 'Hide sources' : `View sources (${m.chunks.length})`}
+                    </button>
+                    {expandedSources.has(i) && (
+                      <div
+                        style={{
+                          marginTop: '0.35rem',
+                          padding: '0.5rem',
+                          borderRadius: 'var(--radius)',
+                          background: 'var(--modulr-surface)',
+                          border: '1px solid var(--modulr-border)',
+                          fontSize: '0.75rem',
+                          color: 'var(--modulr-text-muted)',
+                          maxHeight: '12rem',
+                          overflowY: 'auto',
+                        }}
+                      >
+                        {m.chunks.map((chunk, j) => {
+                          const meta = chunk.meta || {};
+                          const parts = [meta.title, meta.date, meta.account].filter(Boolean);
+                          return (
+                            <div key={j} style={{ marginBottom: j < m.chunks.length - 1 ? '0.5rem' : 0 }}>
+                              <div style={{ fontWeight: 500, color: 'var(--modulr-text)', marginBottom: '0.2rem' }}>
+                                {parts.length ? parts.join(' · ') : (meta.conversationId || `Chunk ${j + 1}`)}
+                              </div>
+                              <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.35 }}>{chunk.snippet || '—'}</div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             ))}
             {chatStatus === 'running' && (
