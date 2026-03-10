@@ -10,10 +10,14 @@ const CHAT_MODEL = 'gpt-4o-mini';
 const CHUNK_SIZE = 800;
 const CHUNK_OVERLAP = 200;
 /** Number of chunks to retrieve in the first stage (vector similarity). */
-const FIRST_STAGE_K = 60;
+const FIRST_STAGE_K = 250;
 /** Number of chunks to keep after reranking (passed to the LLM). */
-const RERANK_TOP_N = 15;
-const MAX_CONTEXT_CHARS = 12000;
+const RERANK_TOP_N = 150;
+/** Max chunks per conversation in the final context, so retrieval spreads across calls. */
+const MAX_CHUNKS_PER_CONVERSATION = 6;
+const MAX_CONTEXT_CHARS = 200000;
+/** Delay in ms between embedding batches to avoid OpenAI rate limits (RPM/TPM). */
+const EMBEDDING_BATCH_DELAY_MS = 350;
 
 /** Structured metadata keys we store per chunk (Salesloft fields). All stored as strings except word_count/char_count. */
 const META_KEYS = [
@@ -145,6 +149,7 @@ export async function buildRag(transcripts, openaiApiKey) {
   const batchSize = 25;
   const embeddings = [];
   for (let i = 0; i < texts.length; i += batchSize) {
+    if (i > 0) await new Promise((r) => setTimeout(r, EMBEDDING_BATCH_DELAY_MS));
     const batch = texts.slice(i, i + batchSize);
     const vecs = await fetchEmbeddings(key, batch);
     embeddings.push(...vecs);
@@ -248,6 +253,26 @@ function rerankChunks(candidates, query, topN = RERANK_TOP_N) {
 }
 
 /**
+ * Apply conversation diversity: from scored candidates (best first), take up to `maxTotal` chunks
+ * but at most `maxPerConv` per conversation so context is spread across calls.
+ */
+function diversifyByConversation(candidates, maxTotal = RERANK_TOP_N, maxPerConv = MAX_CHUNKS_PER_CONVERSATION) {
+  if (!candidates.length) return [];
+  const byConv = new Map();
+  const result = [];
+  for (const c of candidates) {
+    if (result.length >= maxTotal) break;
+    const convId = (c.meta && c.meta.conversationId) != null ? String(c.meta.conversationId) : '';
+    const count = byConv.get(convId) || 0;
+    if (count < maxPerConv) {
+      byConv.set(convId, count + 1);
+      result.push(c);
+    }
+  }
+  return result;
+}
+
+/**
  * Chat with RAG context: retrieve relevant chunks, then call OpenAI with context.
  * @param {{ message: string, history?: Array<{ role: string, content: string }>, openaiApiKey?: string, model?: string }}
  * @returns {Promise<{ reply: string }>}
@@ -267,7 +292,10 @@ export async function ragChat({ message, history = [], openaiApiKey, model }) {
   const chatModel = (model || CHAT_MODEL).trim() || CHAT_MODEL;
 
   const candidates = await retrieveAsync(message, key, FIRST_STAGE_K);
-  const chunks = rerankChunks(candidates, message, RERANK_TOP_N).filter((c) => (c.text || '').trim().length > 0);
+  const reranked = rerankChunks(candidates, message, FIRST_STAGE_K);
+  const chunks = diversifyByConversation(reranked, RERANK_TOP_N, MAX_CHUNKS_PER_CONVERSATION).filter(
+    (c) => (c.text || '').trim().length > 0
+  );
 
   if (chunks.length === 0) {
     return {

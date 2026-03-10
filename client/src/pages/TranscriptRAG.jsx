@@ -288,7 +288,8 @@ export default function TranscriptRAGPage() {
     : 0;
 
   return (
-    <div className="rag-page" style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+    <div className="rag-page" style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+      <div style={{ flex: '0 1 auto', minHeight: 0, overflowY: 'auto' }}>
       <section className="card">
         <div className="card-header">
           <h2>RAG: Search transcripts with an LLM</h2>
@@ -641,9 +642,10 @@ export default function TranscriptRAGPage() {
           )}
         </section>
       )}
+      </div>
 
       {ragStatus.built && (
-      <section className="card" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <section className="card" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div className="card-header">
           <h2>Chat over your transcripts</h2>
           <p>
