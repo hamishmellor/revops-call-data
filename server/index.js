@@ -15,6 +15,7 @@ import { listCalls, fetchConversationsWithTranscripts } from './salesloftSimple.
 import { extractPricingInsights, delayBetweenCalls } from './pricingExtractor.js';
 import { getMockInsight } from './mockExtractor.js';
 import { buildRag, ragChat, getRagStatus } from './rag.js';
+import { analyzeCalls } from './callAnalysis.js';
 import { readFileSync, existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join, resolve } from 'path';
@@ -220,6 +221,25 @@ app.post('/rag/chat', async (req, res) => {
   } catch (err) {
     console.error('[server] /rag/chat error:', err.message);
     res.status(err.message.includes('OpenAI') ? 400 : 500).json({ error: err.message });
+  }
+});
+
+/** POST /analyze-calls — ask one question per transcript, return answer per call. Body: { transcripts: [...], question: string, openaiApiKey?: string, model?: string } */
+app.post('/analyze-calls', async (req, res) => {
+  try {
+    const { transcripts = [], question, openaiApiKey, model } = req.body || {};
+    if (!Array.isArray(transcripts) || transcripts.length === 0) {
+      return res.status(400).json({ error: 'Body must include transcripts array with at least one item' });
+    }
+    if (!question || typeof question !== 'string' || !question.trim()) {
+      return res.status(400).json({ error: 'Body must include non-empty question' });
+    }
+    const result = await analyzeCalls(transcripts, question.trim(), { openaiApiKey, model });
+    return res.json(result);
+  } catch (err) {
+    const message = err?.message ?? String(err);
+    console.error('[server] /analyze-calls error:', message);
+    return res.status(message.includes('OpenAI') || message.includes('API key') ? 400 : 500).json({ error: message });
   }
 });
 

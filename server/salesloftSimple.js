@@ -142,14 +142,35 @@ export async function getConversationMetadata(apiKey, conversationId) {
   }
 }
 
-/** Extract rep display name from extensive conversation: owner_email + invitees[].full_name. */
+/** Extract rep display name from extensive conversation: owner_email + invitees[].full_name, or first participant. */
 function repFromInviteesAndOwner(data) {
   const ownerEmail = (data.owner_email ?? data.owner?.email ?? '').toString().trim().toLowerCase();
-  if (!ownerEmail) return null;
-  const invitees = data.invitees ?? data.attendees ?? [];
+  const invitees = data.invitees ?? data.attendees ?? data.participants ?? [];
   const arr = Array.isArray(invitees) ? invitees : [];
-  const match = arr.find((inv) => (inv.email ?? '').toString().trim().toLowerCase() === ownerEmail);
-  return match && (match.full_name ?? match.display_name ?? match.name) ? String(match.full_name ?? match.display_name ?? match.name).trim() : null;
+  if (ownerEmail) {
+    const match = arr.find((inv) => (inv.email ?? '').toString().trim().toLowerCase() === ownerEmail);
+    if (match && (match.full_name ?? match.display_name ?? match.name))
+      return String(match.full_name ?? match.display_name ?? match.name).trim();
+  }
+  if (arr.length > 0) {
+    const first = arr[0];
+    const name = first.full_name ?? first.display_name ?? first.name ?? (first.first_name && first.last_name ? `${first.first_name} ${first.last_name}`.trim() : null);
+    if (name) return String(name).trim();
+  }
+  return null;
+}
+
+/** Extract rep from extensive conversation data (user, owner, created_by, participants). */
+function repFromExtensiveData(data) {
+  const v =
+    data.user?.display_name ??
+    data.user?.name ??
+    data.rep ??
+    data.user_name ??
+    (data.owner && typeof data.owner === 'object' && (data.owner.display_name ?? data.owner.name)) ??
+    (data.created_by && typeof data.created_by === 'object' && (data.created_by.display_name ?? data.created_by.name)) ??
+    (Array.isArray(data.participants) && data.participants[0] && (data.participants[0].display_name ?? data.participants[0].name ?? data.participants[0].full_name));
+  return v != null ? String(v).trim() : null;
 }
 
 async function fetchUserDisplayName(apiKey, userId) {
@@ -282,8 +303,9 @@ export async function getConversationTranscript(apiKey, conversationId) {
     if (extRes.ok) {
       const ext = await extRes.json();
       const data = ext.data ?? ext.conversation ?? ext;
-      const repFromExtensive = repFromInviteesAndOwner(data);
-      if (repFromExtensive) rep = repFromExtensive;
+      const repFromInvitees = repFromInviteesAndOwner(data);
+      if (repFromInvitees) rep = repFromInvitees;
+      if (!rep) rep = repFromExtensiveData(data);
       if (!account && data.account?.id) account = await fetchAccountName(key, data.account.id);
       if (!account) account = data.account?.name ?? data.company_name ?? data.account_name ?? null;
       const opportunityId = data.opportunity?.id ?? data.opportunity_id ?? null;
@@ -295,14 +317,12 @@ export async function getConversationTranscript(apiKey, conversationId) {
       if (transId) {
         const fromTrans = await fetchTranscriptById(key, transId);
         if (fromTrans) {
-          if (!rep) rep = data.user?.display_name ?? data.rep ?? data.user_name ?? null;
           return { transcript: fromTrans, rep: rep ?? undefined, account: account ?? undefined, deal_stage: deal_stage ?? undefined };
         }
       }
       const transcript =
         data.transcript ?? data.transcript_text ?? data.text ?? data.content ?? null;
       if (transcript && String(transcript).trim()) {
-        if (!rep) rep = data.user?.display_name ?? data.rep ?? data.user_name ?? null;
         return { transcript: String(transcript).trim(), rep: rep ?? undefined, account: account ?? undefined, deal_stage: deal_stage ?? undefined };
       }
       const summary = data.summary ?? data.summary_text ?? null;

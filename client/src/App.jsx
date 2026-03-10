@@ -4,6 +4,7 @@ import HomePage from './pages/Home';
 import PricingInsightPage from './pages/PricingInsight';
 import ExportTranscriptsPage from './pages/ExportTranscripts';
 import TranscriptRAGPage from './pages/TranscriptRAG';
+import CallAnalysisPage from './pages/CallAnalysis';
 
 function Header() {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -26,6 +27,9 @@ function Header() {
           </NavLink>
           <NavLink to="/rag" className={({ isActive }) => (isActive ? 'app-nav-link active' : 'app-nav-link')} onClick={() => setMenuOpen(false)}>
             RAG chat
+          </NavLink>
+          <NavLink to="/call-analysis" className={({ isActive }) => (isActive ? 'app-nav-link active' : 'app-nav-link')} onClick={() => setMenuOpen(false)}>
+            Call analysis
           </NavLink>
         </nav>
         <div className="app-header-actions">
@@ -55,6 +59,7 @@ export default function App() {
             <Route path="/pricing" element={<PricingInsightPage />} />
             <Route path="/transcripts" element={<ExportTranscriptsPage />} />
             <Route path="/rag" element={<TranscriptRAGPage />} />
+            <Route path="/call-analysis" element={<CallAnalysisPage />} />
           </Routes>
         </main>
       </div>
