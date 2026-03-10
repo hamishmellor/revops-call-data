@@ -99,11 +99,21 @@ export async function getConversationMetadata(apiKey, conversationId) {
     const json = await res.json();
     const c = json.data ?? json.conversation ?? json;
 
-    const ownerId = c.owner_id ?? c.user_guid ?? c.created_by_id ?? c.user_id ?? null;
+    const ownerId =
+      c.owner_id ??
+      c.user_guid ??
+      c.created_by_id ??
+      c.user_id ??
+      c.recording?.user_id ??
+      c.recording?.owner_id ??
+      c.call?.user_id ??
+      c.creator_id ??
+      null;
     let rep =
-      c.created_by?.display_name ??
-      c.user?.display_name ??
-      c.creator?.display_name ??
+      (typeof c.created_by?.display_name === 'string' && c.created_by.display_name.trim() ? c.created_by.display_name.trim() : null) ??
+      (typeof c.user?.display_name === 'string' && c.user.display_name.trim() ? c.user.display_name.trim() : null) ??
+      (typeof c.creator?.display_name === 'string' && c.creator.display_name.trim() ? c.creator.display_name.trim() : null) ??
+      (typeof c.recording?.user?.display_name === 'string' && c.recording.user.display_name.trim() ? c.recording.user.display_name.trim() : null) ??
       (ownerId != null ? await fetchUserDisplayName(key, ownerId) : null) ??
       (c.created_by_id != null ? await fetchUserDisplayName(key, c.created_by_id) : null) ??
       (c.user_id != null ? await fetchUserDisplayName(key, c.user_id) : null) ??
@@ -130,6 +140,7 @@ export async function getConversationMetadata(apiKey, conversationId) {
     if (!deal_stage && personId != null) {
       deal_stage = await fetchPersonDealStage(key, personId);
     }
+    if (!rep && c.title) rep = repFromTitle(c.title);
     // Do not use account_stages here: that endpoint returns stage definitions (Open, Disqualified, etc.), not the account's current stage. Use opportunity stage in getConversationTranscript when conversation has an opportunity.
 
     return {
@@ -142,25 +153,55 @@ export async function getConversationMetadata(apiKey, conversationId) {
   }
 }
 
-/** Extract rep display name from extensive conversation: owner_email + invitees[].full_name, or first participant. */
+/**
+ * Parse rep name from conversation title when Users API is not available (403).
+ * e.g. "Call: Scott Deane and +31683235437" -> "Scott Deane", "Call: Jane Smith" -> "Jane Smith"
+ */
+function repFromTitle(title) {
+  if (typeof title !== 'string' || !title.trim()) return null;
+  const t = title.trim();
+  const callPrefix = /^Call:\s*/i;
+  if (!callPrefix.test(t)) return null;
+  const after = t.replace(callPrefix, '').trim();
+  const andIdx = /\s+and\s+/i.exec(after);
+  const name = (andIdx ? after.slice(0, andIdx.index).trim() : after).replace(/\s+/g, ' ').trim();
+  return name.length > 0 ? name : null;
+}
+
+/**
+ * Derive display name from owner_email when Users API is not available.
+ * e.g. "scott.deane@modulrfinance.com" -> "Scott Deane"
+ */
+function repFromOwnerEmail(email) {
+  if (typeof email !== 'string' || !email.trim()) return null;
+  const local = email.trim().split('@')[0];
+  if (!local) return null;
+  const parts = local.split(/[._-]/).filter(Boolean);
+  const name = parts.map((p) => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase()).join(' ');
+  return name.length > 0 ? name : null;
+}
+
+/** Extract rep display name from extensive conversation: owner_email + invitees[].full_name, or first participant. Only returns non-empty strings. */
 function repFromInviteesAndOwner(data) {
   const ownerEmail = (data.owner_email ?? data.owner?.email ?? '').toString().trim().toLowerCase();
   const invitees = data.invitees ?? data.attendees ?? data.participants ?? [];
   const arr = Array.isArray(invitees) ? invitees : [];
   if (ownerEmail) {
     const match = arr.find((inv) => (inv.email ?? '').toString().trim().toLowerCase() === ownerEmail);
-    if (match && (match.full_name ?? match.display_name ?? match.name))
-      return String(match.full_name ?? match.display_name ?? match.name).trim();
+    if (match) {
+      const name = match.full_name ?? match.display_name ?? match.name;
+      if (typeof name === 'string' && name.trim()) return name.trim();
+    }
   }
   if (arr.length > 0) {
     const first = arr[0];
     const name = first.full_name ?? first.display_name ?? first.name ?? (first.first_name && first.last_name ? `${first.first_name} ${first.last_name}`.trim() : null);
-    if (name) return String(name).trim();
+    if (typeof name === 'string' && name.trim()) return name.trim();
   }
   return null;
 }
 
-/** Extract rep from extensive conversation data (user, owner, created_by, participants). */
+/** Extract rep from extensive conversation data (user, owner, created_by, participants, recording). Only returns non-empty strings; rejects false, numbers, etc. */
 function repFromExtensiveData(data) {
   const v =
     data.user?.display_name ??
@@ -169,8 +210,12 @@ function repFromExtensiveData(data) {
     data.user_name ??
     (data.owner && typeof data.owner === 'object' && (data.owner.display_name ?? data.owner.name)) ??
     (data.created_by && typeof data.created_by === 'object' && (data.created_by.display_name ?? data.created_by.name)) ??
+    (data.recording && typeof data.recording === 'object' && (data.recording.user?.display_name ?? data.recording.user?.name ?? data.recording.owner?.display_name)) ??
+    (data.call && typeof data.call === 'object' && (data.call.user?.display_name ?? data.call.user?.name)) ??
     (Array.isArray(data.participants) && data.participants[0] && (data.participants[0].display_name ?? data.participants[0].name ?? data.participants[0].full_name));
-  return v != null ? String(v).trim() : null;
+  if (v == null || v === false || typeof v !== 'string') return null;
+  const s = String(v).trim();
+  return s.length > 0 ? s : null;
 }
 
 async function fetchUserDisplayName(apiKey, userId) {
@@ -181,7 +226,9 @@ async function fetchUserDisplayName(apiKey, userId) {
     if (!res.ok) return null;
     const json = await res.json();
     const u = json.data ?? json.user ?? json;
-    return u.display_name ?? u.name ?? (u.first_name && u.last_name ? `${u.first_name} ${u.last_name}`.trim() : null) ?? null;
+    const name = u.display_name ?? u.name ?? (u.first_name && u.last_name ? `${u.first_name} ${u.last_name}`.trim() : null) ?? null;
+    if (typeof name !== 'string' || !name.trim()) return null;
+    return name.trim();
   } catch (_) {
     return null;
   }
@@ -266,6 +313,28 @@ async function fetchPersonDealStage(apiKey, personId) {
   }
 }
 
+/** GET /v2/transcriptions/:id and return user id for rep resolution, or embedded display_name if present. */
+async function fetchTranscriptionMetadata(apiKey, transcriptionId) {
+  try {
+    const res = await fetch(`${SALESLOFT_BASE}/transcriptions/${encodeURIComponent(transcriptionId)}`, {
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    });
+    if (!res.ok) return { userId: null, repName: null };
+    const json = await res.json();
+    const data = json.data ?? json.transcription ?? json;
+    const repName =
+      (typeof data.user?.display_name === 'string' && data.user.display_name.trim() ? data.user.display_name.trim() : null) ??
+      (typeof data.created_by?.display_name === 'string' && data.created_by.display_name.trim() ? data.created_by.display_name.trim() : null) ??
+      (typeof data.owner?.display_name === 'string' && data.owner.display_name.trim() ? data.owner.display_name.trim() : null) ??
+      null;
+    const userId =
+      data.user_id ?? data.created_by_id ?? data.owner_id ?? data.user?.id ?? data.created_by?.id ?? data.owner?.id ?? null;
+    return { userId: userId != null ? String(userId) : null, repName };
+  } catch (_) {
+    return { userId: null, repName: null };
+  }
+}
+
 /** GET /v2/opportunities/:id and return stage_name (e.g. "SAO"). This is the deal stage for the conversation. */
 async function fetchOpportunityStage(apiKey, opportunityId) {
   try {
@@ -306,6 +375,13 @@ export async function getConversationTranscript(apiKey, conversationId) {
       const repFromInvitees = repFromInviteesAndOwner(data);
       if (repFromInvitees) rep = repFromInvitees;
       if (!rep) rep = repFromExtensiveData(data);
+      if (!rep) rep = repFromExtensiveData(ext);
+      if (!rep) {
+        const uid = data.owner_id ?? data.user_id ?? data.created_by_id ?? data.user_guid ?? data.creator_id ?? (data.user && typeof data.user === 'object' && (data.user.id ?? data.user.guid)) ?? (data.owner && typeof data.owner === 'object' && (data.owner.id ?? data.owner.guid)) ?? (data.created_by && typeof data.created_by === 'object' && (data.created_by.id ?? data.created_by.guid)) ?? null;
+        if (uid != null) rep = await fetchUserDisplayName(key, String(uid));
+      }
+      if (!rep && data.title) rep = repFromTitle(data.title);
+      if (!rep && data.owner_email) rep = repFromOwnerEmail(data.owner_email);
       if (!account && data.account?.id) account = await fetchAccountName(key, data.account.id);
       if (!account) account = data.account?.name ?? data.company_name ?? data.account_name ?? null;
       const opportunityId = data.opportunity?.id ?? data.opportunity_id ?? null;
@@ -315,6 +391,11 @@ export async function getConversationTranscript(apiKey, conversationId) {
       }
       const transId = data.transcription?.id ?? data.transcription_id ?? (data.transcription && typeof data.transcription === 'object' && data.transcription.id) ?? null;
       if (transId) {
+        if (!rep) {
+          const transMeta = await fetchTranscriptionMetadata(key, transId);
+          if (transMeta.repName) rep = transMeta.repName;
+          else if (transMeta.userId) rep = await fetchUserDisplayName(key, transMeta.userId);
+        }
         const fromTrans = await fetchTranscriptById(key, transId);
         if (fromTrans) {
           return { transcript: fromTrans, rep: rep ?? undefined, account: account ?? undefined, deal_stage: deal_stage ?? undefined };
@@ -356,6 +437,19 @@ export async function getConversationTranscript(apiKey, conversationId) {
         ) ?? arr[0];
       if (trans && (trans.id ?? trans.transcription_id)) {
         const tid = String(trans.id ?? trans.transcription_id);
+        if (!rep) {
+          const fromList = (typeof trans.user?.display_name === 'string' && trans.user.display_name.trim()) ? trans.user.display_name.trim() : null;
+          if (fromList) rep = fromList;
+          else {
+            const uidFromList = trans.user_id ?? trans.created_by_id ?? trans.owner_id ?? (trans.user?.id ?? trans.created_by?.id) ?? null;
+            if (uidFromList != null) rep = await fetchUserDisplayName(key, String(uidFromList));
+          }
+          if (!rep) {
+            const transMeta = await fetchTranscriptionMetadata(key, tid);
+            if (transMeta.repName) rep = transMeta.repName;
+            else if (transMeta.userId) rep = await fetchUserDisplayName(key, transMeta.userId);
+          }
+        }
         const text = await fetchTranscriptById(key, tid);
         if (text) return { transcript: text, rep: rep ?? undefined, account: account ?? undefined, deal_stage: deal_stage ?? undefined };
       }
@@ -376,6 +470,19 @@ export async function getConversationTranscript(apiKey, conversationId) {
       );
       if (trans && (trans.id ?? trans.transcription_id)) {
         const tid = String(trans.id ?? trans.transcription_id);
+        if (!rep) {
+          const fromList = (typeof trans.user?.display_name === 'string' && trans.user.display_name.trim()) ? trans.user.display_name.trim() : null;
+          if (fromList) rep = fromList;
+          else {
+            const uidFromList = trans.user_id ?? trans.created_by_id ?? trans.owner_id ?? (trans.user?.id ?? trans.created_by?.id) ?? null;
+            if (uidFromList != null) rep = await fetchUserDisplayName(key, String(uidFromList));
+          }
+          if (!rep) {
+            const transMeta = await fetchTranscriptionMetadata(key, tid);
+            if (transMeta.repName) rep = transMeta.repName;
+            else if (transMeta.userId) rep = await fetchUserDisplayName(key, transMeta.userId);
+          }
+        }
         const text = await fetchTranscriptById(key, tid);
         if (text) return { transcript: text, rep: rep ?? undefined, account: account ?? undefined, deal_stage: deal_stage ?? undefined };
       }
