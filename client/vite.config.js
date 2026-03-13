@@ -19,7 +19,7 @@ export default defineConfig({
       '/rag/chat': 'http://localhost:3001',
       '/analyze-calls': {
         target: 'http://localhost:3001',
-        timeout: 300000,
+        timeout: 3600000, // 60 min — run analysis can take 30+ min with 500+ transcripts
       },
     },
   },

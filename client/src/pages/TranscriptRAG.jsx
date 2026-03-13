@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import ReactMarkdown from 'react-markdown';
 import { apiUrl } from '../api';
 
@@ -46,6 +47,10 @@ export default function TranscriptRAGPage() {
   const [copiedConvId, setCopiedConvId] = useState(null);
   const [showExtraColumns, setShowExtraColumns] = useState(false);
   const [expandedSources, setExpandedSources] = useState(() => new Set());
+  const [ragInfoOpen, setRagInfoOpen] = useState(false);
+  const [ragInfoPlacement, setRagInfoPlacement] = useState(null);
+  const ragInfoButtonRef = useRef(null);
+  const ragInfoCloseTimeoutRef = useRef(null);
   const messagesEndRef = useRef(null);
   const streamCompletedRef = useRef(false);
 
@@ -287,41 +292,154 @@ export default function TranscriptRAGPage() {
       ).length
     : 0;
 
+  const ragInfoTooltipContent = ragInfoOpen && ragInfoPlacement && (
+    <div
+      className="rag-info-tooltip"
+      role="tooltip"
+      onMouseEnter={() => {
+        if (ragInfoCloseTimeoutRef.current) {
+          clearTimeout(ragInfoCloseTimeoutRef.current);
+          ragInfoCloseTimeoutRef.current = null;
+        }
+      }}
+      onMouseLeave={() => {
+        setRagInfoOpen(false);
+        setRagInfoPlacement(null);
+      }}
+      style={{
+        position: 'fixed',
+        top: ragInfoPlacement.top,
+        right: ragInfoPlacement.right,
+        width: ragInfoPlacement.width,
+        maxHeight: ragInfoPlacement.maxHeight,
+        overflowY: 'auto',
+        padding: '1rem',
+        background: 'var(--modulr-surface)',
+        border: '1px solid var(--modulr-border)',
+        borderRadius: 'var(--radius)',
+        boxShadow: 'var(--shadow-md)',
+        fontSize: '0.8125rem',
+        lineHeight: 1.5,
+        color: 'var(--modulr-text)',
+        zIndex: 10000,
+      }}
+    >
+      <p style={{ margin: '0 0 0.75rem' }}>
+        RAG stands for <strong>Retrieval-Augmented Generation</strong>. In practice it means:
+      </p>
+      <p style={{ margin: '0 0 0.35rem', fontWeight: 600 }}>Retrieval</p>
+      <p style={{ margin: '0 0 0.75rem' }}>
+        When you ask a question, the system doesn’t send the whole transcript library to the AI. It searches the indexed transcripts and pulls out the most relevant chunks (e.g. sentences or paragraphs that match your question).
+      </p>
+      <p style={{ margin: '0 0 0.35rem', fontWeight: 600 }}>Augmented</p>
+      <p style={{ margin: '0 0 0.75rem' }}>
+        Those chunks are then added to the prompt as context. So the AI is given: your question + the retrieved snippets (and maybe a short instruction like “answer only from this context”).
+      </p>
+      <p style={{ margin: '0 0 0.35rem', fontWeight: 600 }}>Generation</p>
+      <p style={{ margin: '0 0 0.75rem' }}>
+        The AI generates an answer using only that context (and general language ability). So the reply is grounded in real transcript text, not in “whatever the model might say.”
+      </p>
+      <p style={{ margin: '0 0 0.35rem', fontWeight: 600 }}>Why it matters</p>
+      <p style={{ margin: '0 0 0.5rem' }}>
+        Without RAG, the model would have no access to your calls, or you’d have to paste huge amounts of text (and hit length limits).
+      </p>
+      <p style={{ margin: '0 0 0.75rem' }}>
+        With RAG, the model sees only the bits that are likely to matter for your question, so answers are more accurate and you can trace them back to specific calls.
+      </p>
+      <p style={{ margin: 0 }}>
+        So in one line: RAG = “find the right bits of our data, then ask the AI to answer from those bits.”
+      </p>
+    </div>
+  );
+
   return (
-    <div className="rag-page" style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
-      <div style={{ flex: '0 1 auto', minHeight: 0, overflowY: 'auto' }}>
+    <>
+    <div className="rag-page" style={{ display: 'flex', flexDirection: 'column', flex: '0 0 auto' }}>
+      <div style={{ flex: '0 0 auto' }}>
       <section className="card">
-        <div className="card-header">
-          <h2>RAG: Search transcripts with an LLM</h2>
-          <p>
-            Fetch transcripts from Salesloft (same tool as Export), build a searchable index, then chat with an AI that uses only those transcripts as context.
-          </p>
+        <div className="card-header" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem' }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <h2>RAG: Search transcripts with an LLM</h2>
+            <p>
+              Fetch transcripts from Salesloft (same tool as Export), build a searchable index, then chat with an AI that uses only those transcripts as context.
+            </p>
+            <div
+              className="rag-status-line"
+              style={{
+                marginTop: '1rem',
+                padding: '0.75rem 1rem',
+                borderRadius: 'var(--radius)',
+                background: ragStatus.built ? 'var(--modulr-blue-light)' : 'var(--modulr-surface)',
+                borderLeft: `4px solid ${ragStatus.built ? 'var(--modulr-blue)' : 'var(--modulr-border)'}`,
+                fontSize: '0.875rem',
+                color: 'var(--modulr-text)',
+              }}
+            >
+              {ragStatus.built ? (
+                <>
+                  <strong>RAG available</strong>
+                  {ragStatus.builtAt && (
+                    <> — built {new Date(ragStatus.builtAt).toLocaleString()}</>
+                  )}
+                  {ragStatus.chunkCount != null && ragStatus.chunkCount > 0 && (
+                    <> ({ragStatus.chunkCount} chunks)</>
+                  )}
+                  . Fetch and build again to replace.
+                </>
+              ) : (
+                <>No RAG built yet. Fetch transcripts, then select and build to create one.</>
+              )}
+            </div>
+          </div>
           <div
-            className="rag-status-line"
-            style={{
-              marginTop: '1rem',
-              padding: '0.75rem 1rem',
-              borderRadius: 'var(--radius)',
-              background: ragStatus.built ? 'var(--modulr-blue-light)' : 'var(--modulr-surface)',
-              borderLeft: `4px solid ${ragStatus.built ? 'var(--modulr-blue)' : 'var(--modulr-border)'}`,
-              fontSize: '0.875rem',
-              color: 'var(--modulr-text)',
+            className="rag-info-trigger"
+            style={{ flexShrink: 0 }}
+            onMouseEnter={() => {
+              const el = ragInfoButtonRef.current;
+              if (el) {
+                const rect = el.getBoundingClientRect();
+                const width = Math.min(440, window.innerWidth * 0.9);
+                const spaceBelow = window.innerHeight - rect.bottom - 12;
+                const maxHeight = Math.max(200, Math.min(spaceBelow, window.innerHeight - 80));
+                setRagInfoPlacement({
+                  top: rect.bottom + 8,
+                  right: window.innerWidth - rect.right,
+                  width,
+                  maxHeight,
+                });
+              }
+              setRagInfoOpen(true);
+            }}
+            onMouseLeave={() => {
+              ragInfoCloseTimeoutRef.current = setTimeout(() => {
+                setRagInfoOpen(false);
+                setRagInfoPlacement(null);
+              }, 150);
             }}
           >
-            {ragStatus.built ? (
-              <>
-                <strong>RAG available</strong>
-                {ragStatus.builtAt && (
-                  <> — built {new Date(ragStatus.builtAt).toLocaleString()}</>
-                )}
-                {ragStatus.chunkCount != null && ragStatus.chunkCount > 0 && (
-                  <> ({ragStatus.chunkCount} chunks)</>
-                )}
-                . Fetch and build again to replace.
-              </>
-            ) : (
-              <>No RAG built yet. Fetch transcripts, then select and build to create one.</>
-            )}
+            <button
+              ref={ragInfoButtonRef}
+              type="button"
+              aria-label="What is RAG?"
+              title="What is RAG?"
+              style={{
+                width: '1.75rem',
+                height: '1.75rem',
+                borderRadius: '50%',
+                border: '1px solid var(--modulr-border)',
+                background: 'var(--modulr-surface)',
+                color: 'var(--modulr-text-muted)',
+                fontSize: '0.9rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                lineHeight: 1,
+              }}
+            >
+              i
+            </button>
           </div>
         </div>
 
@@ -645,7 +763,7 @@ export default function TranscriptRAGPage() {
       </div>
 
       {ragStatus.built && (
-      <section className="card" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <section className="card" style={{ flex: '0 0 auto', maxHeight: '104vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div className="card-header">
           <h2>Chat over your transcripts</h2>
           <p>
@@ -835,5 +953,7 @@ export default function TranscriptRAGPage() {
       </section>
       )}
     </div>
+    {ragInfoTooltipContent && createPortal(ragInfoTooltipContent, document.body)}
+    </>
   );
 }

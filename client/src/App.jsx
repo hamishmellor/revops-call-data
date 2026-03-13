@@ -54,6 +54,7 @@ export default function App() {
       <div className="app">
         <Header />
         <main className="app-main">
+          <div className="app-main-content">
           <Routes>
             <Route path="/" element={<HomePage />} />
             <Route path="/pricing" element={<PricingInsightPage />} />
@@ -61,6 +62,7 @@ export default function App() {
             <Route path="/rag" element={<TranscriptRAGPage />} />
             <Route path="/call-analysis" element={<CallAnalysisPage />} />
           </Routes>
+          </div>
         </main>
       </div>
     </BrowserRouter>

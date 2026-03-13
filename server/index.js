@@ -37,8 +37,8 @@ if (envPath) {
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Large payloads for RAG build (many transcripts)
-app.use(express.json({ limit: '20mb' }));
+// Large payloads for RAG build and Call Analysis (many transcripts with full text)
+app.use(express.json({ limit: '100mb' }));
 
 // CORS: allow Vite dev (localhost and 127.0.0.1) so "Failed to fetch" doesn't happen when origin differs
 app.use((req, res, next) => {

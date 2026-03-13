@@ -63,6 +63,20 @@ body {
   overflow-y: auto;
 }
 
+/* Route content: fill main so RAG chat page has constrained height and chat history scrolls inside */
+.app-main-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+/* Prevent route content from shrinking so long pages (e.g. Pricing insight tables) overflow and scroll */
+.app-main-content > * {
+  flex-shrink: 0;
+}
+
 /* Header — same width as #root content, rounded like cards; white to match logo */
 .app-header {
   position: relative;
@@ -282,6 +296,19 @@ body {
   margin: 0.25rem 0 0;
   font-size: 0.8125rem;
   color: var(--modulr-text-muted);
+}
+
+/* Sticky top block so dates + buttons stay visible when scrolling (Export transcripts) */
+.card-export-first {
+  overflow: visible;
+}
+.card-sticky-top {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--modulr-surface);
+  border-bottom: 1px solid var(--modulr-border);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.04);
 }
 
 /* RAG chat: markdown in assistant messages */

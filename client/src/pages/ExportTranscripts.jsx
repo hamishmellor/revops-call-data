@@ -226,12 +226,13 @@ export default function ExportTranscriptsPage() {
 
   return (
     <>
-      <section className="card">
-        <div className="card-header">
-          <h2>Export raw transcripts</h2>
-          <p>Two steps: 1) Fetch transcripts for the date range and review the list. 2) Download a .zip containing summary.txt (index of all calls) and one .txt file per call (easy for LLMs to parse). No pricing analysis.</p>
-        </div>
-        <div className="controls">
+      <section className="card card-export-first">
+        <div className="card-sticky-top">
+          <div className="card-header">
+            <h2>Export raw transcripts</h2>
+            <p>Two steps: 1) Fetch transcripts for the date range and review the list. 2) Download a .zip containing summary.txt (index of all calls) and one .txt file per call (easy for LLMs to parse). No pricing analysis.</p>
+          </div>
+          <div className="controls">
           <div className="control-group">
             <label>Start date</label>
             <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
@@ -251,6 +252,7 @@ export default function ExportTranscriptsPage() {
           >
             2) Download .zip {selectedIds.size > 0 ? `(${selectedIds.size} selected)` : ''}
           </button>
+        </div>
         </div>
         {fetchError && <div className="alert alert-error">{fetchError}</div>}
         {fetchStatus === 'running' && (
